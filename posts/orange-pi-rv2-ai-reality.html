@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What the Orange Pi RV2 AI story looks like in practice | Codex RISC-V Builds</title>
+  <meta name="description" content="A short, evidence-driven summary of Orange Pi RV2 / Ky X1 AI, RVV, ONNX Runtime, and performance findings.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">Codex RISC-V Builds</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.125-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Hardware notes</p>
+    <h1>What the Orange Pi RV2 AI story looks like in practice</h1>
+    <p class="lede">The Orange Pi RV2 / Ky X1 is an interesting RISC-V board, but the practical AI story is more CPU-vector than magic accelerator.</p>
+
+    <h2>No obvious discrete NPU</h2>
+    <p>The local investigation did not find a discrete NPU exposed by the device tree, kernel config, device nodes, or runtime stack. The hardware description contains video, GPU, V2D, and JPEG-related blocks, but no NPU node or NPU power domain. The running system similarly exposed video and graphics devices, but no obvious <code>/dev/npu*</code>-style interface.</p>
+
+    <p>The vendor-facing claim that mattered most was worded as CPU-mode INT8 AI capability without requiring an independent NPU module. That matches the evidence: the useful acceleration path appears to be CPU-side RISC-V Vector Extension work, not offload to a separate neural processor.</p>
+
+    <h2>What ky-ort appears to be</h2>
+    <p>The bundled <code>ky-ort</code> stack looks like an ONNX Runtime package with a SpaceMIT/Ky execution provider. Static inspection showed quantized kernels, fused MLP references, CPU provider integration, and runtime hints around local scratch/cache devices. That is useful, but it reads as a CPU/RVV-optimized runtime, not a separate NPU runtime.</p>
+
+    <p>In quick tests with a small INT4 Qwen2 model, the demo produced roughly 13 tokens per second. Relaxing permissions for scratch/cache-related device nodes removed some runtime warnings but did not materially change throughput. Attempts to enable certain profiling or provider-option paths caused crashes, so the stack still feels fragile.</p>
+
+    <h2>What RVV did well</h2>
+    <p>The RVV microbenchmarks gave a clearer picture. Effective vector length for 8-bit elements was 32 lanes, consistent with a 256-bit vector length. <code>vsetvli</code> overhead measured around 3.4 to 3.7 cycles per call, which is small but important if it sits inside the wrong loop.</p>
+
+    <p>Streaming INT8 MAC and dot-product loops showed modest uplift over scalar, roughly in the low double digits depending on the case. Reuse-heavy micro-GEMM was much better: keeping accumulators live and reusing data across multiple output rows produced around an 8x scalar speedup in the measured kernel.</p>
+
+    <h2>What mattered for kernels</h2>
+    <p>The best measured region was not exotic. It was practical: M=4, N equal to the vector length, K at least 256, and a K block around 128. Ragged N handling also mattered. Padding to 32 and masking stores consistently beat reduced-vector-length tails in the measured cases.</p>
+
+    <p>The short version is that RVV is a strong vector math tool, but the shape of the kernel matters. Streaming work leaves less room for wins. Reuse-heavy kernels can benefit a lot. Tail handling and <code>vsetvli</code> placement are not details; they are part of the performance story.</p>
+
+    <h2>Why this matters for coding agents</h2>
+    <p>This is exactly the kind of platform where an on-device coding agent is useful. The work is not one heroic trick. It is a long loop of checking claims, reading headers and binaries, running small benchmarks, patching build systems, testing runtime behavior, and separating real acceleration from wishful marketing.</p>
+
+    <p>The conclusion is not that the RV2 is bad. The conclusion is that the board is capable, but the software ecosystem is still rough. A capable agent running directly on the board helps because the real problems are local: architecture assumptions, missing release artifacts, custom vendor stacks, fragile profiling paths, and performance cliffs that only show up when you run the code.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>

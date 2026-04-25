@@ -33,7 +33,7 @@
     <p>That made Codex a good fit for this experiment: build the missing RISC-V pieces, keep the patch small, publish the artifact, and document the process clearly enough that future builds do not start from zero.</p>
 
     <h2>What this is not</h2>
-    <p>This is not a claim that Codex is the only agent worth using on RISC-V. Goose deserves an honorable mention: it was easy to target in earlier experiments. In my experience, getting state-of-the-art hosted models wired into the workflow was less direct, and local models were not quite strong enough at the time for the self-diagnosis loop RISC-V development tends to need. Your mileage may vary.</p>
+    <p>This is not a claim that Codex is the only agent worth using on RISC-V. Goose deserves an honorable mention: it was one of the easier projects to target in earlier experiments, and its MCP-centered design is a reasonable bet for interoperability. For my specific goal, though, the extra extension layer made the direct build-fix-test loop feel less straightforward, and getting state-of-the-art hosted models into that workflow was less direct. Local models were also not quite strong enough at the time for the self-diagnosis loop RISC-V development tends to need. Your mileage may vary.</p>
 
     <h2>Goal</h2>
     <p>The goal is simple: make it easier to run a capable coding agent directly on RISC-V Linux boards, starting with the Orange Pi RV2 / SpacemiT K1 class of hardware.</p>
