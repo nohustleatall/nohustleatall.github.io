@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orange Pi RV2 Field Notes | Codex RISC-V Builds</title>
+  <meta name="description" content="Practical Orange Pi RV2 bring-up notes for RISC-V Linux, RVV, Codex, AI runtimes, and troubleshooting.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">Codex RISC-V Builds</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html" aria-current="page">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.125-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Board guide</p>
+    <h1>Orange Pi RV2 Field Notes</h1>
+    <p class="lede">A practical checklist for using the Orange Pi RV2 as a RISC-V Linux development machine, especially if you want to run coding agents or experiment with local AI runtimes.</p>
+
+    <h2>Known-good baseline</h2>
+    <p>The notes here come from an Orange Pi RV2 / SpacemiT K1 class board running a vendor Linux 6.6.x image. Treat that as the baseline. Other images may differ in kernel config, device nodes, package availability, and RVV behavior.</p>
+
+    <pre><code>uname -a
+cat /etc/os-release
+lscpu
+</code></pre>
+
+    <h2>First boot checklist</h2>
+    <p>Install a basic development and sandboxing toolchain before debugging higher-level software.</p>
+
+    <pre><code>sudo apt update
+sudo apt install -y bubblewrap git curl file build-essential pkg-config cmake ninja-build python3 python3-venv python3-pip
+bwrap --version
+</code></pre>
+
+    <p>Codex’s Linux sandbox path expects system bubblewrap on this build. Without it, sandboxed command execution will fail before the interesting work starts.</p>
+
+    <h2>Install Codex</h2>
+    <p>Download the current RISC-V build, verify the checksum, make it executable, and run the version check.</p>
+
+    <pre><code>curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/codex-0.125.0-orangepi-rv2-riscv64gc-v8
+curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS
+sha256sum -c SHA256SUMS
+chmod +x codex-0.125.0-orangepi-rv2-riscv64gc-v8
+./codex-0.125.0-orangepi-rv2-riscv64gc-v8 --version
+</code></pre>
+
+    <p>Expected version:</p>
+
+    <pre><code>codex-cli 0.125.0
+</code></pre>
+
+    <h2>Hardware reality check</h2>
+    <p>The local investigation did not find an obvious discrete NPU. Device tree, kernel config, device nodes, and runtime behavior all pointed toward CPU/RVV-based INT8 acceleration rather than offload to a separate neural processor.</p>
+
+    <p>The practical takeaway: use the board as a RISC-V CPU and RVV development target. Be cautious with marketing-style TOPS claims unless you can map them to a specific exposed device, driver, runtime, and workload.</p>
+
+    <h2>RVV status</h2>
+    <p>RVV is real and useful on this board. In local microbenchmarks, effective vector length for 8-bit elements was 32 lanes, consistent with a 256-bit vector length. <code>vsetvli</code> measured around 3.4 to 3.7 cycles per call.</p>
+
+    <pre><code>lscpu | grep -i vector
+cat /proc/cpuinfo | grep -i '^isa' | head
+</code></pre>
+
+    <p>For kernel work, the biggest lesson was simple: RVV helps most when the kernel reuses data and keeps vector accumulators live. Streaming INT8 dot/MAC loops improved modestly. Reuse-heavy micro-GEMM improved much more.</p>
+
+    <h2>AI runtime notes</h2>
+    <p>The vendor <code>ky-ort</code> package appears to be a CPU/RVV-oriented ONNX Runtime stack with a SpaceMIT/Ky execution provider. Static inspection showed quantized kernels and fused MLP paths, not a clear NPU offload path.</p>
+
+    <p>A small INT4 Qwen2 demo produced roughly 13 tokens per second in quick testing. Relaxing permissions for scratch/cache-related device nodes removed warnings but did not materially change throughput. Some profiling and provider-option paths crashed, so treat this stack as useful but fragile.</p>
+
+    <h2>Performance guidance</h2>
+    <ul>
+      <li>Hoist <code>vsetvli</code> out of inner loops when possible.</li>
+      <li>Prefer reuse-heavy kernels over simple streaming loops when trying to benefit from RVV.</li>
+      <li>For measured INT8 micro-GEMM, M=4, N=32, and K at least 256 was the best region.</li>
+      <li>For ragged N, padding to 32 and masking stores beat reduced-vector-length tails in the measured cases.</li>
+      <li>Do not treat per-core RVV results as equivalent to board-level marketing TOPS claims.</li>
+    </ul>
+
+    <h2>Troubleshooting</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symptom</th>
+            <th>Likely cause</th>
+            <th>First check</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sandboxed commands fail before running</td>
+            <td>Missing system bubblewrap</td>
+            <td><code>bwrap --version</code></td>
+          </tr>
+          <tr>
+            <td>Seccomp architecture panic</td>
+            <td>Older Codex build without RISC-V seccomp target selection</td>
+            <td>Use the 0.125 RV2 build or apply the published patch</td>
+          </tr>
+          <tr>
+            <td>Binary does not start</td>
+            <td>Missing dynamic loader or glibc mismatch</td>
+            <td><code>file ./codex...</code> and <code>ldd ./codex...</code></td>
+          </tr>
+          <tr>
+            <td>Python package unavailable</td>
+            <td>RISC-V wheel gap</td>
+            <td>Check apt first, then expect source builds for heavy packages</td>
+          </tr>
+          <tr>
+            <td>AI runtime crashes when profiling</td>
+            <td>Fragile vendor runtime path</td>
+            <td>Reproduce with the smallest model/config before trusting results</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Open questions</h2>
+    <ul>
+      <li>How well the RVV kernel results scale across cores and memory bandwidth.</li>
+      <li>Whether a clean PyTorch path for this board becomes practical.</li>
+      <li>How much of the vendor ONNX stack can be reproduced with upstream-friendly components.</li>
+      <li>Whether RISC-V <code>rusty_v8</code> artifacts can become easy to publish and consume.</li>
+      <li>Which Codex RISC-V patches can be upstreamed cleanly.</li>
+    </ul>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
