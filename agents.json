@@ -1,0 +1,23 @@
+{
+  "project": "Codex RISC-V Builds",
+  "site": "https://nohustleatall.github.io/",
+  "repos": {
+    "site": "https://github.com/nohustleatall/nohustleatall.github.io",
+    "artifacts": "https://github.com/nohustleatall/codex-riscv-builds"
+  },
+  "latest": {
+    "version": "0.125.0",
+    "target": "riscv64gc-unknown-linux-gnu",
+    "board": "Orange Pi RV2 / SpacemiT K1 class boards",
+    "release": "https://github.com/nohustleatall/codex-riscv-builds/releases/tag/v0.125.0-orangepi-rv2-riscv64gc-v8",
+    "binary": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/codex-0.125.0-orangepi-rv2-riscv64gc-v8",
+    "sha256": "49c48155ee83ce02ad73df3816da85e6558d6fd49afbf7850a6d2a0a48146bc3",
+    "checksum_file": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS",
+    "patch": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/codex-rv2-local-changes-0.125.patch"
+  },
+  "privacy": {
+    "analytics": false,
+    "comments": false,
+    "contact_form": false
+  }
+}

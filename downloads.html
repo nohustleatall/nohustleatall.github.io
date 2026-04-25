@@ -18,7 +18,7 @@
 
   <main>
     <h1>Downloads</h1>
-    <p class="lede">Large binaries are intended to live in GitHub Releases. This page records filenames, target details, and checksums so downloads can be verified.</p>
+    <p class="lede">Large binaries live in GitHub Releases. This page records direct artifact URLs, target details, and checksums so downloads can be verified.</p>
 
     <div class="table-wrap">
       <table>
@@ -34,22 +34,32 @@
           <tr>
             <td>0.125.0</td>
             <td>Orange Pi RV2 / <code>riscv64gc-unknown-linux-gnu</code></td>
-            <td><a href="https://github.com/nohustleatall/codex-riscv-builds/releases">pending release asset</a></td>
-            <td><code>49c48155ee83ce02ad73df3816da85e6558d6fd49afbf7850a6d2a0a48146bc</code></td>
+            <td><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/codex-0.125.0-orangepi-rv2-riscv64gc-v8">codex-0.125.0-orangepi-rv2-riscv64gc-v8</a></td>
+            <td><code>49c48155ee83ce02ad73df3816da85e6558d6fd49afbf7850a6d2a0a48146bc3</code></td>
           </tr>
           <tr>
             <td>0.124.0</td>
             <td>Orange Pi RV2 / <code>riscv64gc-unknown-linux-gnu</code></td>
-            <td><a href="https://github.com/nohustleatall/codex-riscv-builds/releases">pending release asset</a></td>
+            <td>local archive only</td>
             <td><code>c3028c6a945696d3bbee1eeb3b08be8c353c20935a9f92e570ddc8099a2f6c39</code></td>
           </tr>
         </tbody>
       </table>
     </div>
 
+    <h2>Release metadata</h2>
+    <ul class="link-list">
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/tag/v0.125.0-orangepi-rv2-riscv64gc-v8">GitHub Release page</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS">SHA256SUMS</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/dynamic-deps.txt">dynamic-deps.txt</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/file.txt">file.txt</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.125.0-orangepi-rv2-riscv64gc-v8/codex-rv2-local-changes-0.125.patch">RV2 patch</a></li>
+    </ul>
+
     <h2>Verification</h2>
-    <pre><code>sha256sum codex
-./codex --version</code></pre>
+    <pre><code>sha256sum codex-0.125.0-orangepi-rv2-riscv64gc-v8
+chmod +x codex-0.125.0-orangepi-rv2-riscv64gc-v8
+./codex-0.125.0-orangepi-rv2-riscv64gc-v8 --version</code></pre>
   </main>
 
   <footer>
