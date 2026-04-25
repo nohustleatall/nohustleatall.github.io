@@ -3,6 +3,7 @@
   "site": "https://nohustleatall.github.io/",
   "repos": {
     "site": "https://github.com/nohustleatall/nohustleatall.github.io",
+    "rationale": "https://nohustleatall.github.io/posts/why-riscv-codex-builds.html",
     "artifacts": "https://github.com/nohustleatall/codex-riscv-builds"
   },
   "latest": {

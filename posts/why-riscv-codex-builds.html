@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why build Codex for RISC-V? | Codex RISC-V Builds</title>
+  <meta name="description" content="A short explanation of why this project builds Codex CLI artifacts for RISC-V Linux boards.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">Codex RISC-V Builds</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/why-riscv-codex-builds.html" aria-current="page">Why This Exists</a>
+      <a href="/posts/codex-0.125-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Project rationale</p>
+    <h1>Why build Codex for RISC-V?</h1>
+    <p class="lede">RISC-V development boards are real computers now, but the software ecosystem still has rough edges. This project is about making one useful tool available where it is most needed: on the machine being debugged.</p>
+
+    <h2>The problem</h2>
+    <p>Working on RISC-V Linux often means diagnosing missing packages, incomplete release matrices, architecture assumptions, cross-compilation gaps, and runtime dependencies that quietly only exist for x86_64 and arm64. That is exactly the kind of work where a coding agent can help: inspect logs, patch source, rebuild, test, and keep track of the boring details.</p>
+
+    <p>The catch is that many coding agents are themselves difficult to run on less common architectures. Gemini CLI is a Node.js and TypeScript project. OpenCode’s current package metadata and development workflow are Bun-centered, and its published optional binaries cover common x64/arm64 targets. Claude Code now has native installers, but its documented npm/platform support is also centered on x64 and arm64. These tools may improve, and some may already be possible with enough effort, but the target moves quickly.</p>
+
+    <h2>Why Codex</h2>
+    <p>Codex CLI was the most practical target here. The current project is overwhelmingly Rust, and OpenAI publishes native release binaries for mainstream platforms. RISC-V was not just a matter of running <code>cargo build</code>, because code mode depends on V8 through <code>rusty_v8</code>, and the Linux sandbox needed a RISC-V seccomp architecture selector. Still, the dependency shape was understandable and fixable.</p>
+
+    <p>That made Codex a good fit for this experiment: build the missing RISC-V pieces, keep the patch small, publish the artifact, and document the process clearly enough that future builds do not start from zero.</p>
+
+    <h2>What this is not</h2>
+    <p>This is not a claim that Codex is the only agent worth using on RISC-V. Goose deserves an honorable mention: it was easy to target in earlier experiments. In my experience, getting state-of-the-art hosted models wired into the workflow was less direct, and local models were not quite strong enough at the time for the self-diagnosis loop RISC-V development tends to need. Your mileage may vary.</p>
+
+    <h2>Goal</h2>
+    <p>The goal is simple: make it easier to run a capable coding agent directly on RISC-V Linux boards, starting with the Orange Pi RV2 / SpacemiT K1 class of hardware.</p>
+
+    <h2>References</h2>
+    <ul class="link-list">
+      <li><a href="https://github.com/openai/codex">OpenAI Codex CLI</a></li>
+      <li><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a></li>
+      <li><a href="https://docs.claude.com/en/docs/claude-code/setup">Claude Code setup docs</a></li>
+      <li><a href="https://opencode.ai/docs/">OpenCode docs</a></li>
+      <li><a href="https://bun.com/docs/runtime">Bun runtime docs</a></li>
+      <li><a href="https://github.com/block/goose">Goose</a></li>
+    </ul>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
