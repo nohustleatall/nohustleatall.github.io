@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RISC-V Coding Agents and the Runtime Wall | Codex RISC-V Builds</title>
+  <meta name="description" content="Field notes from trying to bring Bun and opencode-style coding agents to RISC-V Linux.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">Codex RISC-V Builds</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.128-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Cross-lab notes</p>
+    <h1>RISC-V coding agents and the runtime wall</h1>
+    <p class="lede">If you are trying to run modern coding agents directly on a RISC-V Linux board, the hard part may not be the agent. It may be the JavaScript runtime and native packaging stack underneath it.</p>
+
+    <h2>Short version</h2>
+    <p>Codex was practical to publish for the Orange Pi RV2 because its Rust codebase had a small number of concrete RISC-V blockers: a target V8 archive, a cross-compiled OpenSSL path, and a Linux seccomp architecture fix. Bun-based agents are in a different place. The first wall is not application logic. It is that the current standalone executable and JavaScriptCore/WebKit stack do not provide a clean RISC-V Linux path.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Observed status</th>
+            <th>Practical meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Codex Rust CLI</td>
+            <td>Released for <code>riscv64gc-unknown-linux-gnu</code></td>
+            <td>Usable today with a published RV2 binary.</td>
+          </tr>
+          <tr>
+            <td>opencode standalone</td>
+            <td>Blocked by Bun executable target support</td>
+            <td><code>bun-linux-riscv64</code> is not an accepted standalone compile target.</td>
+          </tr>
+          <tr>
+            <td>opencode bundle for Node</td>
+            <td>Blocked by Bun-specific imports and dependency graph issues</td>
+            <td>A quick retarget is not enough; the package graph still assumes Bun in places.</td>
+          </tr>
+          <tr>
+            <td>Bun Zig core</td>
+            <td>Partial RISC-V object build</td>
+            <td>The Zig layer can be pushed forward, but this is not a runnable Bun binary.</td>
+          </tr>
+          <tr>
+            <td>Bun full binary</td>
+            <td>Blocked around WebKit/JSC and platform configuration</td>
+            <td>The runtime stack needs deeper RISC-V support before it is a normal cross-build.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>opencode: first blocker</h2>
+    <p>The obvious path for a Bun-centered CLI is to ask Bun to compile a standalone Linux RISC-V executable. That failed immediately: the standalone target matrix did not accept a RISC-V Linux target. The upstream build script also enumerated common Linux, macOS, and Windows targets for x64 and arm64, but not RISC-V.</p>
+
+    <p>That is an important negative result. If your plan is simply "add riscv64 to the release target list," expect to hit Bun itself before you get to any meaningful application test.</p>
+
+    <h2>opencode: second blocker</h2>
+    <p>The next experiment was a more ordinary JavaScript bundle that could potentially run under a different runtime. That also did not become a clean path. Parts of the CLI and TUI graph still imported Bun builtins, and dependency resolution exposed native/package assumptions that would need real porting work rather than a packaging tweak.</p>
+
+    <p>This does not mean opencode can never work on RISC-V. It means the useful work is probably not at the final packaging layer. A better starting point is to split the runtime-dependent parts from the agent logic and make an explicit supported mode for a non-standalone, non-Bun executable environment.</p>
+
+    <h2>Bun: what got farther</h2>
+    <p>Bun itself was more interesting. A RISC-V Linux configuration could get through parts of the build system, and a direct Zig object build from the source root succeeded for the tested revision. That is progress, but it is easy to overread: a cached RISC-V object is not the same thing as a usable Bun runtime.</p>
+
+    <p>The larger C++ build reached hundreds of build steps, including RISC-V-specific TinyCC objects and networking/runtime pieces, before failing in the JavaScriptCore/WebKit area. The failures were not a single missing flag. They involved platform allocator selection, ICU/header plumbing, and JavaScriptCore source/header assumptions that showed up during a cross build.</p>
+
+    <h2>WebKit/JSC is the real boundary</h2>
+    <p>The most useful lesson is that Bun-on-RISC-V is largely a JavaScriptCore/WebKit porting problem. The experiments reached generated JavaScriptCore sources and JSC shell-related build steps before failing on missing or mismatched internal types and platform configuration details. That is the kind of problem where a small downstream patch may get one build farther, but a durable solution needs upstream-quality architecture support.</p>
+
+    <p>If you are trying this yourself, do not start by debugging the coding agent. First prove that your Bun or JSC runtime path is real on RISC-V Linux. Until that is true, every agent-level failure may just be a runtime-port failure wearing a different name.</p>
+
+    <h2>What I would try next</h2>
+    <ul>
+      <li>Track Bun's supported executable target matrix before spending time on downstream CLI packaging.</li>
+      <li>Build and test the smallest possible JavaScriptCore shell for RISC-V Linux before attempting the full Bun binary.</li>
+      <li>Keep sysroot, ICU, allocator, and libc choices explicit; hidden host includes can waste days.</li>
+      <li>For Bun-centered agents, separate "can the app bundle" from "can Bun run on the target." They are different milestones.</li>
+      <li>For immediate use on RV2-class boards, start with agent stacks whose native runtime already has a plausible RISC-V story.</li>
+    </ul>
+
+    <h2>Why this matters</h2>
+    <p>RISC-V boards are good places to use coding agents because the work is full of logs, patches, build flags, and repeated smoke tests. But an agent is only as portable as its runtime stack. For now, the Rust/V8 path used by Codex has been easier to turn into a published RV2 artifact than the Bun/JSC path used by some other tools.</p>
+
+    <p>That may change. When it does, the fastest route will probably come from treating runtime support as the main project, not as a final packaging chore.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
