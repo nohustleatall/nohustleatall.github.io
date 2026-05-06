@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>opencode 1.14.25 Experimental Single-File Build on RISC-V | RISC-V Agent Lab</title>
+  <meta name="description" content="Field notes from packaging an experimental opencode 1.14.25 single-file build for Linux RISC-V and smoke-testing it on Orange Pi RV2.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.128-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Cross-lab notes</p>
+    <h1>opencode now has an experimental RISC-V single-file build</h1>
+    <p class="lede">The earlier Bun/opencode experiments were mostly about finding the runtime wall. The current result is more useful: an experimental opencode 1.14.25 package that runs on an Orange Pi RV2 class RISC-V Linux board.</p>
+
+    <h2>What exists</h2>
+    <p>The current artifact is a release-shaped tarball named <code>opencode-1.14.25-linux-riscv64-singlefile-experimental.tar.gz</code>. It contains a RISC-V <code>opencode</code> executable, runtime sidecars, native PTY support, a RISC-V Parcel watcher package, package metadata, checksums, and bundled license notices.</p>
+
+    <pre><code>sha256: 2ac79866db10c6e81a6df7904c4457b10c61015b4253d4114352b8153f07b29b
+target: linux-riscv64-gnu
+board class: Orange Pi RV2 / SpacemiT K1 / Ky X1
+opencode: 1.14.25
+reported build version: 1.14.25-riscv-probe</code></pre>
+
+    <p>The package is intentionally labeled experimental. It is not the stock upstream opencode release process with a new target added. It is a RISC-V-focused package built through a local Bun single-file path and a set of scoped compatibility shims.</p>
+
+    <h2>What passed on RV2</h2>
+    <p>The extracted package passed a remote package smoke test on the RV2. The smoke verified the tarball checksum, extracted the package, verified the package <code>SHA256SUMS</code>, and ran startup and server checks from the extracted directory.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Verified surface</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Startup</td>
+            <td><code>--version</code>, <code>--help</code>, debug paths</td>
+          </tr>
+          <tr>
+            <td>Data commands</td>
+            <td>DB query, session list, stats, import, export</td>
+          </tr>
+          <tr>
+            <td>Models/providers</td>
+            <td>Provider listing, model snapshots, fake-SSE provider streaming path</td>
+          </tr>
+          <tr>
+            <td>Server</td>
+            <td>Reduced <code>serve --once</code>, plugin visibility, MCP route visibility</td>
+          </tr>
+          <tr>
+            <td>MCP</td>
+            <td>Local stdio server connect, tool discovery, <code>/bin/cat</code> JSON-RPC round trip</td>
+          </tr>
+          <tr>
+            <td>Native pieces</td>
+            <td>PTY loading/spawn/read and Parcel watcher native binding</td>
+          </tr>
+          <tr>
+            <td>TUI</td>
+            <td>Focused OpenTUI/Solid attach path starts, focuses input, submits <code>quit</code>, and exits cleanly</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How the package is shaped</h2>
+    <p>The package is not just one executable. The single-file binary still needs runtime sidecars on this board class, so the package includes <code>rv2-runtime-libs</code> and expects <code>LD_LIBRARY_PATH</code> to point there before startup.</p>
+
+    <pre><code>cd opencode-1.14.25-linux-riscv64-singlefile-experimental
+export LD_LIBRARY_PATH="$PWD/rv2-runtime-libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+sha256sum -c SHA256SUMS
+./opencode --version
+./opencode --help</code></pre>
+
+    <p>The package metadata records the executable, runtime libraries, <code>librust_pty.so</code>, and the RISC-V Parcel watcher native module. License coverage is packaged under <code>LICENSES/</code>, with a short <code>THIRD_PARTY_NOTICES.md</code> describing the bundled components.</p>
+
+    <h2>What is still experimental</h2>
+    <p>The biggest qualification is that some surfaces are deliberately reduced or shimmed for the single-file RISC-V package.</p>
+
+    <ul>
+      <li><code>attach</code> uses a focused OpenTUI/Solid attach path rather than the full upstream TUI app graph.</li>
+      <li>The OpenTUI native library is extracted to a real temporary filesystem path before renderer startup because it cannot be opened directly from Bun's embedded filesystem.</li>
+      <li><code>bisect-server</code> is a reduced diagnostic command covering the currently useful RISC-V boundaries.</li>
+      <li>The plugin service supports configured local file plugins and safe built-in auth/provider hooks, but skips some optional auth plugins, npm plugin installation, and the server SDK client path.</li>
+      <li>The MCP service is usable for local stdio servers and tool discovery, but the extra <code>/mcp/tools</code>, <code>/mcp/prompts</code>, and <code>/mcp/resources</code> HTTP endpoints are diagnostic surfaces rather than upstream OpenAPI routes.</li>
+    </ul>
+
+    <h2>Why this matters</h2>
+    <p>This changes the status from "Bun-based agents hit the runtime wall" to "a useful experimental opencode package can be made to run on RV2." That is a significant difference for people trying to use RISC-V boards as development machines. It also narrows the remaining work: the next problems are not generic "RISC-V cannot run this" problems, but specific standalone compiler, optional dependency graph, plugin service, and full TUI graph boundaries.</p>
+
+    <p>The practical lesson is the same as the Codex build: RISC-V support usually arrives as a pile of small, explicit boundaries. Once those boundaries are named, they become testable.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
