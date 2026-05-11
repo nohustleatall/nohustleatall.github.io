@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>opencode 1.14.25 Single-File Build on RISC-V | RISC-V Agent Lab</title>
+  <meta name="description" content="Field notes from packaging opencode 1.14.25 as a Linux RISC-V single-file build and smoke-testing it on Orange Pi RV2.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.128-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Cross-lab notes</p>
+    <h1>opencode now has a RISC-V single-file package</h1>
+    <p class="lede">The opencode work has moved past the earlier experimental package. The current 1.14.25 Linux RISC-V tarball has installer support, shell completions, package-local smoke tests, and an RV2-validated upstream TUI attach path.</p>
+
+    <h2>Download</h2>
+    <p>The package is published as <code>opencode-1.14.25-linux-riscv64-singlefile.tar.gz</code>. It contains the RISC-V <code>opencode</code> executable, runtime sidecars, native PTY support, the RISC-V Parcel watcher package, shell completions, release notes, build metadata, checksums, and bundled license notices.</p>
+
+    <p>Download it from the GitHub Release:</p>
+
+    <ul class="link-list">
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/tag/opencode-1.14.25-linux-riscv64-singlefile">Release page</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.14.25-linux-riscv64-singlefile/opencode-1.14.25-linux-riscv64-singlefile.tar.gz">opencode-1.14.25-linux-riscv64-singlefile.tar.gz</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.14.25-linux-riscv64-singlefile/opencode-1.14.25-linux-riscv64-singlefile.tar.gz.sha256">opencode-1.14.25-linux-riscv64-singlefile.tar.gz.sha256</a></li>
+    </ul>
+
+    <pre><code>sha256: 817d7611a81b5c9028be2caec9855a41d83227c54aa344fce09eab1f38b094a1
+target: linux-riscv64-gnu
+board class: Orange Pi RV2 / SpacemiT K1 / Ky X1
+opencode: 1.14.25
+reported build version: 1.14.25-riscv-probe</code></pre>
+
+    <p>This is a patched RISC-V package, not an official upstream opencode release. The bundled <code>BUILDINFO</code> records dirty source trees for opencode and Bun, so treat the artifact as a practical RV2 build rather than a byte-for-byte rebuild recipe.</p>
+
+    <h2>What it took</h2>
+    <p>This is the part that would have saved the most time at the start: the opencode port was not blocked by one missing target string. The work had to cut through several layers of runtime and packaging assumptions.</p>
+
+    <ul>
+      <li>Bun had to accept and produce a RISC-V standalone executable target for this package path.</li>
+      <li>The package needed a RISC-V Bun runtime with JavaScriptCore, ICU, libc++, libc++abi, and libunwind sidecars available at runtime.</li>
+      <li>The opencode entrypoint was built through a Bun single-file compile path instead of the upstream release matrix, which currently centers common x64 and arm64 targets.</li>
+      <li><code>rust-pty</code> had to be available as a RISC-V native library so terminal/session paths could load and spawn correctly.</li>
+      <li><code>@parcel/watcher</code> needed a Linux RISC-V glibc native package so file watching used the native inotify backend instead of silently falling back.</li>
+      <li>The MCP stdio path needed a RISC-V standalone-safe entrypoint shim to avoid a current Bun standalone import failure around direct <code>node:process</code> use.</li>
+      <li>The plugin path needed to move from a standalone loader mode to the upstream plugin service with SDK-backed auth hooks and event forwarding.</li>
+      <li>The TUI path had to move past a focused OpenTUI/Solid attach shim to the upstream TUI app graph through a RISC-V attach wrapper.</li>
+      <li>OpenTUI's native renderer library had to be extracted to a real filesystem path before <code>dlopen</code>, because shared libraries cannot be opened directly from Bun's embedded filesystem.</li>
+      <li>The Linux clipboard fallback had to avoid the current Bun RISC-V standalone <code>clipboardy</code> import crash by using native clipboard commands and terminal OSC 52.</li>
+      <li>The release package needed install/uninstall scripts, completions, package-local smoke, release notes, build info, and checksum coverage for those files.</li>
+    </ul>
+
+    <h2>What passed on RV2</h2>
+    <p>The latest package smoke is broader than the previous experimental check. It verifies the tarball checksum, extracts the package, verifies package checksums, starts the server, exercises the upstream TUI attach path under a PTY, runs the package-local smoke, installs through <code>install.sh</code>, verifies the installed wrapper, runs <code>opencode --riscv-smoke</code>, then uninstalls and checks cleanup.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Verified surface</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Package</td>
+            <td>Tarball checksum, package <code>SHA256SUMS</code>, manifest, build info, release notes, notices, licenses</td>
+          </tr>
+          <tr>
+            <td>Startup</td>
+            <td><code>--version</code>, <code>--help</code>, debug paths, installed wrapper startup</td>
+          </tr>
+          <tr>
+            <td>Data commands</td>
+            <td>DB query, session list, stats, import, export</td>
+          </tr>
+          <tr>
+            <td>Models/providers</td>
+            <td>Provider listing, model snapshots, fake-SSE provider streaming path</td>
+          </tr>
+          <tr>
+            <td>Server</td>
+            <td><code>serve --once</code>, plugin visibility, MCP route visibility</td>
+          </tr>
+          <tr>
+            <td>MCP</td>
+            <td>Upstream MCP service for local stdio server connections, tool discovery, and JSON-RPC transport smoke</td>
+          </tr>
+          <tr>
+            <td>Plugins</td>
+            <td>Upstream plugin service by default, local plugin loading, bus forwarding, SDK-backed GitLab and Poe auth hooks</td>
+          </tr>
+          <tr>
+            <td>Native pieces</td>
+            <td>PTY loading/spawn/read and Parcel watcher native binding</td>
+          </tr>
+          <tr>
+            <td>TUI</td>
+            <td>Upstream TUI app graph through the RISC-V attach wrapper, internal TUI plugin activation, prompt readiness, renderer teardown, and clean PTY exit</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Install</h2>
+    <p>The package can be run in place or installed under a prefix. The installer writes a wrapper that sets <code>LD_LIBRARY_PATH</code> for the bundled runtime sidecars and installs bash, zsh, and fish completions.</p>
+
+    <pre><code>sha256sum -c opencode-1.14.25-linux-riscv64-singlefile.tar.gz.sha256
+tar -xzf opencode-1.14.25-linux-riscv64-singlefile.tar.gz
+cd opencode-1.14.25-linux-riscv64-singlefile
+sha256sum -c SHA256SUMS
+./smoke.sh
+./install.sh --prefix "$HOME/.local"
+opencode --version
+opencode --riscv-smoke</code></pre>
+
+    <p>The installer also supports uninstalling the wrapper, completions, and package root:</p>
+
+    <pre><code>./install.sh --prefix "$HOME/.local" --uninstall</code></pre>
+
+    <p>The package metadata records the executable, runtime libraries, <code>librust_pty.so</code>, and the RISC-V Parcel watcher native module. License coverage is packaged under <code>LICENSES/</code>, with a short <code>THIRD_PARTY_NOTICES.md</code> describing the bundled components.</p>
+
+    <h2>What changed since the experimental build</h2>
+    <p>The first published opencode artifact proved the single-file path could run on RV2. This newer package removes several of the most important qualifications.</p>
+
+    <ul>
+      <li>The package name no longer carries the experimental suffix.</li>
+      <li><code>install.sh</code>, <code>smoke.sh</code>, shell completions, <code>BUILDINFO</code>, and <code>RELEASE_NOTES.md</code> are included in the tarball and covered by <code>SHA256SUMS</code>.</li>
+      <li>The TUI path now imports the upstream TUI app graph through a RISC-V attach wrapper instead of the earlier focused attach shim.</li>
+      <li>The package smoke now verifies internal TUI plugin activation, prompt readiness, <code>tui:done</code>, renderer teardown, and PTY status 0.</li>
+      <li>The plugin runtime now uses the upstream plugin service by default, including real SDK-backed GitLab and Poe auth hooks.</li>
+      <li>The MCP path uses the upstream MCP service for local stdio servers and tool discovery.</li>
+      <li>The installer and installed wrapper have their own smoke path, so users can verify the installed package without remembering the runtime-library setup.</li>
+    </ul>
+
+    <h2>What still matters</h2>
+    <p>The package still carries the realities of a RISC-V port. It bundles runtime sidecars for the validated RV2/K1 class environment, and the OpenTUI native library is still extracted to a real temporary filesystem path before renderer startup because shared libraries cannot be opened directly from Bun's embedded filesystem.</p>
+
+    <p>The upstream <code>clipboardy</code> fallback is replaced in this single-file mode with Linux-native clipboard commands and terminal OSC 52 because the current Bun RISC-V standalone path still crashes on that import. That is a scoped workaround, not a user-facing showstopper for the validated smoke path.</p>
+
+    <p>The practical lesson is that "RISC-V support" became real only after the runtime, native modules, plugin service, MCP service, TUI renderer, installer, and smoke tests were each made explicit. The useful artifact is the tarball, but the useful knowledge is the boundary list.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
