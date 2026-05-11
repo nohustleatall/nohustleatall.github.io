@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 0.130.0 on Orange Pi RV2 | RISC-V Agent Lab</title>
+  <meta name="description" content="Notes from building Codex 0.130.0 for the Orange Pi RV2 RISC-V development board.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html" aria-current="page">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Build notes</p>
+    <h1>Codex 0.130.0 on Orange Pi RV2</h1>
+    <p class="lede">The current working build targets <code>riscv64gc-unknown-linux-gnu</code> for the Orange Pi RV2 / SpacemiT K1 class of boards.</p>
+
+    <h2>What changed</h2>
+    <p>Codex 0.130.0 builds with the same board-specific compatibility work used for the earlier Orange Pi RV2 releases, updated against the newer upstream Codex tag.</p>
+
+    <ul>
+      <li>Build OpenSSL from source for the RISC-V target.</li>
+      <li>Skip vendored bubblewrap during cross-compilation when target libcap is not available through pkg-config.</li>
+      <li>Select <code>seccompiler</code>'s <code>riscv64</code> target architecture for the network seccomp filter.</li>
+      <li>Use a locally built RISC-V <code>rusty_v8</code> archive for Codex code-mode support.</li>
+    </ul>
+
+    <h2>Current artifact</h2>
+    <p>The 0.130.0 binary is dynamically linked for RISC-V Linux and depends on the usual system C runtime libraries plus <code>libgcc_s</code>. On the target board, system bubblewrap is expected to provide the filesystem sandbox path.</p>
+
+    <pre><code>codex-cli 0.130.0
+sha256: 2b0bb4bf8b65bc8689e0ff407305b434c4f47cc0b99f7436d15ee989f4778152</code></pre>
+
+    <h2>Status</h2>
+    <p>The binary builds, reports the expected Codex version, and includes the RISC-V seccomp architecture fix needed for sandboxed command execution.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
