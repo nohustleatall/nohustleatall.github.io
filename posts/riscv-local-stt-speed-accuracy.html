@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Can a Cheap RISC-V Board Do Useful Local STT? | RISC-V Agent Lab</title>
+  <meta name="description" content="Field notes from testing local speech-to-text models, low-bit kernels, and a scratch CTC model on Orange Pi RV2-class RISC-V hardware.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Audio lab notes</p>
+    <h1>Can a cheap RISC-V board do useful local STT?</h1>
+    <p class="lede">The short answer is yes, but not with every model and not for every product shape. On Orange Pi RV2-class hardware, the useful local speech-to-text path is less about chasing the newest model and more about matching runtime, decoder cost, and accuracy to the job.</p>
+
+    <h2>What was tested</h2>
+    <p>The lab pass compared several local speech-to-text paths on the RV2 board class: Vosk, sherpa models, Moonshine tiny, NVIDIA Parakeet variants, Qwen3-ASR, IBM Granite Speech, and a deliberately small CTC model trained from scratch. The goal was not to declare one universal winner. The goal was to find which approaches are actually plausible on a small RISC-V CPU.</p>
+
+    <p>Two measurements matter throughout this post. Real-time factor, or RTF, is runtime divided by audio duration. An RTF below 1.0 is faster than realtime. Loaded-model RTF is the more useful number for an appliance or service, because model load time can be amortized after startup.</p>
+
+    <h2>Baseline: Vosk still matters</h2>
+    <p>Vosk small remains a useful control because it is traditional, local, and dependency-light. Open-vocabulary decoding on the RV2 was correct enough to keep around, but it was not fast enough for live captioning: the best safe decoder setting landed around 1.37 RTF.</p>
+
+    <p>Vosk changed character in grammar mode. With a constrained phrase list, the same board reached about 0.27 RTF at the best thread setting. That does not solve open-vocabulary dictation, but it is immediately relevant for a wake phrase, a voice command appliance, or a small domain-specific listener.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Best observed RTF</th>
+            <th>Practical read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Vosk open vocabulary</td>
+            <td>~1.37</td>
+            <td>Useful baseline, not live enough for open captioning.</td>
+          </tr>
+          <tr>
+            <td>Vosk constrained grammar</td>
+            <td>~0.27</td>
+            <td>Good fit for command mode and appliance-style controls.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The shortlist</h2>
+    <p>The most useful near-term open-vocabulary candidates were the ones that combined a clean runtime path with acceptable loaded-model speed. Moonshine tiny became the best speed/accuracy reference once a bad ONNX Runtime mismatch was fixed. Parakeet realtime EOU and Parakeet TDT also became valid candidates after runner and artifact issues were separated from model quality.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Candidate</th>
+            <th>Quality signal</th>
+            <th>Loaded steady RTF</th>
+            <th>Read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Moonshine tiny ONNX</td>
+            <td>0 word edits on a small clean suite</td>
+            <td>~0.37</td>
+            <td>Best current speed/accuracy reference.</td>
+          </tr>
+          <tr>
+            <td>Parakeet realtime EOU 120M int8</td>
+            <td>Matched saved reference token IDs after a runner fix</td>
+            <td>~0.50</td>
+            <td>Good streaming and endpointing candidate.</td>
+          </tr>
+          <tr>
+            <td>Parakeet TDT 0.6B v3 official int8</td>
+            <td>2 word edits on the same clean suite</td>
+            <td>~0.68</td>
+            <td>Strong accuracy/speed tradeoff, but large to load.</td>
+          </tr>
+          <tr>
+            <td>sherpa Paraformer English int8</td>
+            <td>Good transcripts on labeled clips</td>
+            <td>~0.46</td>
+            <td>Useful control candidate.</td>
+          </tr>
+          <tr>
+            <td>Qwen3-ASR 0.6B ONNX CPU</td>
+            <td>1 word edit on the clean suite</td>
+            <td>~3.26</td>
+            <td>Good accuracy reference, too slow for live RV2 use.</td>
+          </tr>
+          <tr>
+            <td>Granite Speech 4.1 2B NAR int8</td>
+            <td>Transcript glue still invalid locally</td>
+            <td>~5.50</td>
+            <td>Architecture note, not an RV2 realtime candidate.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Runtime bugs can look like bad models</h2>
+    <p>One of the more important lessons was not about architecture at all. Moonshine tiny initially looked broken: repeated or gibberish tokens and no clean end-of-sequence behavior. The cause was not the model. The native runner was linked against a source-built ONNX Runtime that produced different encoder tensors from the Python wheel runtime. Relinking to the known-good runtime made checksums match and produced correct text.</p>
+
+    <p>The same pattern showed up elsewhere. A Parakeet realtime runner bug took the wrong logits slice from a 4D decoder output. Some sherpa paths needed a soname-compatible ONNX Runtime shim. A mixed int4/int8 Parakeet TDT package blanked out while the official int8 artifacts decoded correctly. The practical rule is simple: bucket failures before discarding a model. Tensor mismatch, tokenizer mismatch, frontend mismatch, decoder-loop bugs, and bad quantization artifacts are different problems.</p>
+
+    <h2>Int8 beat int4 here</h2>
+    <p>It is tempting to assume packed int4 will make everything faster on a small board. The RV2 low-bit GEMM probes did not support that. The useful hot path was RVV int8 dot product. Int4 values expanded to int8 computed at roughly int8 speed, but keeping weights packed and unpacking them inside the hot loop lost time.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Kernel path</th>
+            <th>Observed result</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>RVV int8 dot</td>
+            <td>~4.2-4.9 GOPS across tested ASR-like shapes</td>
+            <td>Best practical target for hot compute.</td>
+          </tr>
+          <tr>
+            <td>Int4 pre-expanded to int8</td>
+            <td>About int8 speed</td>
+            <td>Useful as a storage/load-time idea, not a compute win.</td>
+          </tr>
+          <tr>
+            <td>Packed int4 direct RVV dot</td>
+            <td>~1.7-1.9 GOPS</td>
+            <td>Correct, but much slower than int8.</td>
+          </tr>
+          <tr>
+            <td>Packed int4 unpack-row RVV</td>
+            <td>Often slower, especially for joiner-like shapes</td>
+            <td>Unpack overhead dominates too easily.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>For this board, int8 is the thing to design around. Packed int4 may still matter for storage, load time, or a future vendor kernel, but it should not be assumed to accelerate the RV2 CPU path.</p>
+
+    <h2>The scratch CTC experiment</h2>
+    <p>The scratch model was intentionally small and CTC-based. CTC is a clean speed proof because the encoder dominates, greedy decode is nearly free, and there is no autoregressive token loop or transducer joiner loop. If a tiny CTC encoder could not get large realtime headroom, a more complex architecture probably would not rescue the speed target.</p>
+
+    <p>The later scratch branch used a 384-wide, 10-layer encoder with a 512-token SentencePiece CTC target and a small token bigram language model. On full LibriSpeech <code>test-clean</code>, the best decoded setting reached about 0.321 WER and 0.138 CER. That is not competitive with the shortlist models. It is, however, fast.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sample</th>
+            <th>Audio seconds</th>
+            <th>ONNX chunks</th>
+            <th>Greedy RTF</th>
+            <th>Beam+LM RTF</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Clean sample A</td>
+            <td>9.963</td>
+            <td>2</td>
+            <td>0.155</td>
+            <td>0.217</td>
+          </tr>
+          <tr>
+            <td>Clean sample B</td>
+            <td>6.625</td>
+            <td>1</td>
+            <td>0.120</td>
+            <td>0.184</td>
+          </tr>
+          <tr>
+            <td>Clean sample C</td>
+            <td>16.715</td>
+            <td>3</td>
+            <td>0.159</td>
+            <td>0.234</td>
+          </tr>
+          <tr>
+            <td>Median</td>
+            <td>-</td>
+            <td>-</td>
+            <td>0.155</td>
+            <td>0.217</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The full-pipeline result includes feature extraction, fixed 800-frame ONNX chunks, and decoding. Greedy CTC lands inside the original 0.15-0.20 RTF target band. Beam search with a token bigram LM is still about 4.6x faster than realtime, but the Python decoder pushes the median to about 0.217 RTF.</p>
+
+    <h2>What that means</h2>
+    <p>The scratch CTC path proves that RV2-class hardware has enough CPU for very fast local STT if the model is designed for it. It does not prove that the scratch model is useful yet. Accuracy is the blocker. A custom CTC path probably needs a better training recipe, stronger data, teacher distillation, or a more careful decoder before it beats practical off-the-shelf candidates.</p>
+
+    <p>The speed margin is real but smaller than the encoder-only benchmark suggested. Encoder/logit timing alone made the scratch CTC branch look roughly 4-7x ahead of the shortlist. Once real features and beam+LM decoding were included, the practical advantage narrowed to something closer to 1.7-3.1x versus the better loaded-model candidates.</p>
+
+    <h2>Practical conclusion</h2>
+    <p>If the goal is useful local STT soon, start with Moonshine tiny, Parakeet realtime EOU, Parakeet TDT int8, or a sherpa Paraformer-style control path. Keep Vosk grammar mode for constrained command interfaces. Treat Qwen-style and Granite-style models as accuracy or architecture references on this board, not realtime defaults.</p>
+
+    <p>If the goal is research, the scratch CTC path is worth continuing. It gives a clear speed ceiling, a simple export path, and a narrow optimization target: int8 encoder compute plus a cheaper decoder. The next high-value experiment is not making it smaller. It is making it accurate enough that the speed advantage matters.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
