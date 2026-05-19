@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How Many Threads Should You Use on Orange Pi RV2? | RISC-V Agent Lab</title>
+  <meta name="description" content="Thread-scaling notes for Orange Pi RV2 inference workloads, including ONNX synthetic probes, scratch CTC speech-to-text, and Vosk.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Performance notes</p>
+    <h1>How many threads should you use on Orange Pi RV2?</h1>
+    <p class="lede">The current answer is: do not default to all cores. On Orange Pi RV2 / Ky X1-class hardware, thread count is a real benchmark variable, and the best setting depends on the graph and the complete application pipeline.</p>
+
+    <h2>Short version</h2>
+    <p>Start full single-stream workloads at 2 threads, try 4 threads when the hot path is clearly a larger ONNX or GEMM-heavy section, and prove any all-core setting before using it. In the current tests, 8 threads often hurt latency once preprocessing, decoding, or decoder-side system time entered the workload.</p>
+
+    <h2>Why this matters</h2>
+    <p>Small-board inference is not just one operator running in isolation. A real speech-to-text path may include audio loading or capture, feature extraction, ONNX inference, greedy or beam decoding, a language model, endpointing, UI work, shell interaction, and logging. If the model uses every core, the rest of the application still has to run somewhere.</p>
+
+    <p>That is why isolated operator timing and full-pipeline timing can disagree. The right thread count is the one that wins the workload you are actually shipping or using, not the one that wins a single kernel benchmark.</p>
+
+    <h2>ONNX synthetic matrix</h2>
+    <p>The first sweep used default ONNX Runtime 1.18.0 with the CPU provider. Each setting ran prebuilt synthetic ONNX probes with nine measured runs after warmup. Times are median milliseconds.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Probe</th>
+            <th>1 thread</th>
+            <th>2 threads</th>
+            <th>4 threads</th>
+            <th>8 threads</th>
+            <th>Best</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>gemm_fp32_64</code></td>
+            <td>0.440</td>
+            <td>0.489</td>
+            <td>0.205</td>
+            <td>0.186</td>
+            <td>8</td>
+          </tr>
+          <tr>
+            <td><code>gemm_fp32_128</code></td>
+            <td>0.925</td>
+            <td>0.752</td>
+            <td>0.497</td>
+            <td>0.465</td>
+            <td>8</td>
+          </tr>
+          <tr>
+            <td><code>gemm_fp32_medium</code></td>
+            <td>2.389</td>
+            <td>1.926</td>
+            <td>1.633</td>
+            <td>5.598</td>
+            <td>4</td>
+          </tr>
+          <tr>
+            <td><code>matmul_integer_u8s8_medium</code></td>
+            <td>1.349</td>
+            <td>0.741</td>
+            <td>0.763</td>
+            <td>0.943</td>
+            <td>2</td>
+          </tr>
+          <tr>
+            <td><code>conv_fp32_medium</code></td>
+            <td>2.694</td>
+            <td>1.742</td>
+            <td>5.119</td>
+            <td>6.192</td>
+            <td>2</td>
+          </tr>
+          <tr>
+            <td><code>qlinear_conv_u8s8_medium</code></td>
+            <td>1.702</td>
+            <td>1.257</td>
+            <td>1.538</td>
+            <td>2.127</td>
+            <td>2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The synthetic result is already enough to reject one global answer. Small fp32 GEMM benefited from 8 threads. Medium fp32 GEMM peaked at 4 and regressed badly at 8. Medium int8 MatMul and conv-like probes favored 2 threads.</p>
+
+    <h2>Scratch CTC full pipeline</h2>
+    <p>The more important test used the scratch 384x10 SentencePiece CTC speech model, exported as MatMul/Gemm dynamic int8 ONNX. This benchmark included feature extraction, fixed-window ONNX chunks, greedy decode, and beam4/top16 plus token-bigram-LM decode across three audio samples.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Threads</th>
+            <th>Median greedy RTF</th>
+            <th>Median beam+LM RTF</th>
+            <th>Median ONNX s/sample</th>
+            <th>Max beam+LM RTF</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>0.243</td>
+            <td>0.318</td>
+            <td>2.682</td>
+            <td>0.337</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>0.160</td>
+            <td>0.232</td>
+            <td>1.814</td>
+            <td>0.253</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>0.172</td>
+            <td>0.241</td>
+            <td>1.653</td>
+            <td>0.269</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>0.249</td>
+            <td>0.320</td>
+            <td>2.556</td>
+            <td>0.325</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Here the full pipeline favored 2 threads. Four threads slightly reduced median ONNX time, but not enough to beat 2 threads after decode and the rest of the pipeline were included. Eight threads regressed close to the 1-thread result.</p>
+
+    <h2>Vosk recap</h2>
+    <p>The older Vosk runs show the same practical pattern. Both open-vocabulary mode and constrained grammar mode favored 2 threads. Eight threads was worst in both modes.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Vosk mode</th>
+            <th>1 thread RTF</th>
+            <th>2 threads RTF</th>
+            <th>4 threads RTF</th>
+            <th>8 threads RTF</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Open vocabulary</td>
+            <td>1.595</td>
+            <td>1.465</td>
+            <td>1.689</td>
+            <td>2.210</td>
+          </tr>
+          <tr>
+            <td>Grammar mode</td>
+            <td>0.452</td>
+            <td>0.274</td>
+            <td>0.303</td>
+            <td>0.507</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Grammar mode is much faster because it solves a constrained problem. It is useful for command interfaces, not a replacement for open-vocabulary dictation. The thread lesson is separate: even when the task is faster, all cores were still the wrong default.</p>
+
+    <h2>Practical guidance</h2>
+    <ol>
+      <li>Run the isolated model or operator at 1, 2, 4, and 8 threads.</li>
+      <li>Run the complete pipeline at the same thread counts.</li>
+      <li>Report median and max or p95-like tail behavior, not only the best run.</li>
+      <li>Prefer the setting that wins the full workload, not the isolated kernel.</li>
+      <li>Leave at least one or two cores worth of scheduling headroom for interactive or streaming applications.</li>
+    </ol>
+
+    <p>For current RV2 single-stream inference work, 2 threads is the best first guess. Four threads is worth trying for larger ONNX-heavy sections. Eight threads should be treated as something to justify with measurements, not as the natural setting for an 8-core board.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
