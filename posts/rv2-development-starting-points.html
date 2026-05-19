@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orange Pi RV2 Development Starting Points | RISC-V Agent Lab</title>
+  <meta name="description" content="Practical starting points for Orange Pi RV2 development, including RVV, Python package reality, ONNX Runtime compatibility, and first smoke tests.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Board guide</p>
+    <h1>Orange Pi RV2 development starting points</h1>
+    <p class="lede">The Orange Pi RV2 is a useful RISC-V Linux development board, but it rewards a different workflow than x86_64 or arm64. Start by proving the board, runtime, graph form, and package stack before judging the application.</p>
+
+    <h2>The baseline assumption</h2>
+    <p>Treat the CPU and RVV path as the main programmable target. The board is good for RISC-V Linux work, CPU inference experiments, packaging tests, and RVV kernel exploration. Do not assume that AI marketing numbers imply a generally programmable NPU path until you can point at a device, driver, runtime, and tiny smoke test that proves it.</p>
+
+    <p>The practical starting model is simple: Linux userspace works well enough for normal C/C++ and Python experiments, RVV is the interesting acceleration surface, and vendor ONNX Runtime packages are relevant mostly because they can change operator coverage and CPU/RVV behavior.</p>
+
+    <h2>Record the board first</h2>
+    <p>Before debugging an app or model, capture the basic environment. On small boards, the OS image, kernel, Python version, compiler, and storage situation can change the result.</p>
+
+    <pre><code>uname -a
+lscpu
+python3 --version
+gcc --version
+clang --version || true
+free -h
+df -h
+python3 - <<'PY'
+import platform
+print(platform.machine())
+print(platform.platform())
+PY</code></pre>
+
+    <p>Keep this information beside benchmark notes. It is much easier to compare results later if the runtime and board state are recorded before the first failure.</p>
+
+    <h2>Python package reality</h2>
+    <p>Expect fewer prebuilt wheels than on x86_64 or aarch64. Some packages install cleanly, some need long source builds, and some do not have a practical <code>riscv64</code> path yet. A failed <code>pip install</code> is not the same thing as a failed model.</p>
+
+    <ul>
+      <li>Use a separate virtual environment per experiment.</li>
+      <li>Record Python version, package versions, and install source.</li>
+      <li>Prefer pure-Python packages or packages with known <code>riscv64</code> wheels.</li>
+      <li>Budget time for C++, Rust, Fortran, protobuf, and numerical package builds.</li>
+      <li>For ONNX work, keep model generation separate from runtime-only environments.</li>
+    </ul>
+
+    <h2>RVV: prove the shape</h2>
+    <p>For performance work, verify that the compiler can build the RVV code shape you intend to use. Do not assume every intrinsic or tuple type is available in the board image's compiler.</p>
+
+    <p>The low-level pattern that has worked best is conservative: write a scalar checksum first, add the RVV implementation second, compare checksums for every shape, and only then time it. Record the exact <code>-march</code> and <code>-mabi</code> flags. A binary that runs is not enough if it silently misses the intended vector path.</p>
+
+    <p>The most useful compute lesson so far is that signed int8 is the first serious optimization target. Packed int4 is not automatically faster. If the hot loop has to split nibbles, sign-adjust them, create separate activation streams, and reduce multiple products, unpack overhead can dominate the smaller representation.</p>
+
+    <h2>ONNX Runtime is part of the target</h2>
+    <p>This is the biggest trap. ONNX export does not make a model portable by itself. The ONNX graph form, runtime version, operator coverage, execution provider, linked shared library, graph optimization setting, and thread count are all part of the deployment target.</p>
+
+    <p>The first general ONNX Runtime matrix on RV2 used synthetic probes before judging real models. Two runtime lanes were compared: a default ONNX Runtime 1.18.0 lane and a SpacemiT ONNX Runtime 1.24.0+spacemit.a3 lane. The important finding was operator coverage, not a universal speed win.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Probe</th>
+            <th>Default ORT 1.18.0</th>
+            <th>SpacemiT ORT 1.24</th>
+            <th>Practical read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>MatMulInteger</code></td>
+            <td>valid</td>
+            <td>valid</td>
+            <td>Dense dynamic-int8 paths are plausible in both lanes.</td>
+          </tr>
+          <tr>
+            <td><code>QLinearMatMul</code></td>
+            <td>valid</td>
+            <td>valid</td>
+            <td>Static quantized dense paths are also plausible.</td>
+          </tr>
+          <tr>
+            <td><code>ConvInteger</code> unsigned</td>
+            <td>valid</td>
+            <td>valid</td>
+            <td>Plain support claims are not detailed enough.</td>
+          </tr>
+          <tr>
+            <td><code>ConvInteger</code> u8 x s8</td>
+            <td>load fail</td>
+            <td>valid</td>
+            <td>Common int8 conv exports may need the newer runtime.</td>
+          </tr>
+          <tr>
+            <td><code>ConvInteger</code> s8 x s8</td>
+            <td>load fail</td>
+            <td>valid</td>
+            <td>Signed quantized conv is a real compatibility boundary.</td>
+          </tr>
+          <tr>
+            <td><code>QLinearConv</code> u8 x s8</td>
+            <td>valid</td>
+            <td>valid</td>
+            <td>QLinear/QDQ graph forms may be more portable than some <code>ConvInteger</code> exports.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The same split showed up on both tiny and medium convolution probes. That matched earlier real-model failures where some int8 exports were blocked by <code>ConvInteger</code> under the default runtime but runnable under the newer SpacemiT runtime.</p>
+
+    <h2>Speed was not one-sided</h2>
+    <p>The vendor runtime was not simply faster at everything. In the matrix pass, default ORT was faster on one medium fp32 convolution probe, while SpacemiT ORT was faster on medium int8 MatMul and QLinearConv. The reason to keep the SpacemiT lane is not "always faster"; it is that it closes a real operator-coverage gap.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Medium probe</th>
+            <th>Default ORT 1.18.0</th>
+            <th>SpacemiT ORT 1.24</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>fp32 GEMM</td>
+            <td>3.835 ms</td>
+            <td>3.487 ms</td>
+          </tr>
+          <tr>
+            <td>u8 x s8 MatMulInteger</td>
+            <td>0.566 ms</td>
+            <td>0.331 ms</td>
+          </tr>
+          <tr>
+            <td>fp32 Conv</td>
+            <td>1.567 ms</td>
+            <td>2.443 ms</td>
+          </tr>
+          <tr>
+            <td>u8 x s8 ConvInteger</td>
+            <td>load fail</td>
+            <td>1.981 ms</td>
+          </tr>
+          <tr>
+            <td>u8 x s8 QLinearConv</td>
+            <td>1.740 ms</td>
+            <td>1.322 ms</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Use synthetic probes first</h2>
+    <p>A useful board sanity suite should include small ONNX graphs from several families before a large real model enters the picture: tensor plumbing, fp32 GEMM, fp32 Conv, <code>MatMulInteger</code>, <code>QLinearMatMul</code>, <code>QLinearConv</code>, signed and mixed signed <code>ConvInteger</code>, QDQ, and one small real model from the target domain.</p>
+
+    <p>For each probe, record load success, run success, output checksum, warm median runtime, thread count, runtime version, providers, and graph optimization level. That separates three questions that are otherwise easy to mix together: whether the board has enough compute, whether the runtime can execute the graph, and whether the application code handles preprocessing and postprocessing correctly.</p>
+
+    <h2>Runtime linkage matters</h2>
+    <p>The runtime imported by Python in your shell may not be the runtime loaded by an application binary. If a binary ships or links its own ONNX Runtime, test that lane separately.</p>
+
+    <pre><code>ldd ./your_binary | grep -i onnx || true
+python3 - <<'PY'
+import onnxruntime as ort
+print(ort.__version__)
+print(ort.get_available_providers())
+PY</code></pre>
+
+    <p>If the binary requests a specific <code>libonnxruntime.so</code> soname, changing <code>LD_LIBRARY_PATH</code> may not redirect it to the library you expected. Verify with <code>ldd</code> or a controlled smoke test.</p>
+
+    <h2>Threading is a benchmark variable</h2>
+    <p>More threads are not automatically better. On small CPU boards, extra threads can hurt latency, increase contention, and leave less headroom for the rest of the application. Test at least 1, 2, 4, and all-core settings. Record median time and outliers, not only the best run.</p>
+
+    <h2>Good first experiments</h2>
+    <ol>
+      <li>Build and run a scalar C hello-world plus one simple numerical loop.</li>
+      <li>Compile a tiny RVV checksum test and compare it against scalar output.</li>
+      <li>Run a Python package smoke test in a clean virtual environment.</li>
+      <li>Run a synthetic ONNX operator matrix for the runtime environment you plan to use.</li>
+      <li>Run one small real model and verify output against a known checksum, text, or classification.</li>
+      <li>Run the same model with 1, 2, 4, and all-core thread settings.</li>
+      <li>Only then move to larger models, custom kernels, or application-level debugging.</li>
+    </ol>
+
+    <h2>Common pitfalls</h2>
+    <ul>
+      <li>Assuming vendor AI claims imply an accessible general-purpose NPU.</li>
+      <li>Treating <code>riscv64</code> like x86_64 for Python wheels.</li>
+      <li>Judging a model before checking ONNX Runtime operator support.</li>
+      <li>Saying <code>ConvInteger</code> is supported or unsupported without checking dtype form.</li>
+      <li>Assuming int4 is faster than int8 because it is smaller.</li>
+      <li>Ignoring app-linked runtime libraries.</li>
+      <li>Publishing benchmark notes with local paths, hostnames, or raw device logs.</li>
+    </ul>
+
+    <p>The useful habit is to make failures precise. Prefer <code>load_fail: ConvInteger u8 x s8</code>, <code>wrong_output: tensor checksum mismatch</code>, or <code>valid_slow</code> over "the model is broken." On this board, that discipline saves a lot of time.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
