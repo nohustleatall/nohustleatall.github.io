@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What Is the Orange Pi RV2 Actually Good At as a CPU? | RISC-V Agent Lab</title>
+  <meta name="description" content="A workload fit map for Orange Pi RV2, including source search, agent utility work, ONNX runtime behavior, thread scaling, and MiniLM embedding throughput.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Workload map</p>
+    <h1>What is the Orange Pi RV2 actually good at as a CPU?</h1>
+    <p class="lede">The Orange Pi RV2 is not a good primary box for large local generative LLM inference. That is the wrong yardstick. As a small RISC-V CPU/RVV board, it is more interesting as a local lab node for source search, metadata work, log parsing, modest ONNX inference, embeddings, and always-on command/listener experiments.</p>
+
+    <h2>The useful question</h2>
+    <p>The useful question is not whether the board can pretend to be a workstation. It is which local workloads fit its CPU, memory, threading, and runtime behavior. The current data says the RV2 is strongest when the work is bounded, local, and pipeline-friendly.</p>
+
+    <h2>Agent utility work</h2>
+    <p>A generated utility suite tested source search, JSONL parsing, SQLite metadata work, diff generation, compression, and checksums. On a smaller generated corpus with 320 source files and 3,200 JSONL rows, most tasks stayed comfortably interactive.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Workload</th>
+            <th>Median</th>
+            <th>Read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>rg</code> source search</td>
+            <td>67 ms</td>
+            <td>Fast and interactive.</td>
+          </tr>
+          <tr>
+            <td>JSONL parse/summarize</td>
+            <td>171 ms</td>
+            <td>Good fit for modest logs.</td>
+          </tr>
+          <tr>
+            <td>SQLite insert/index/query</td>
+            <td>180 ms</td>
+            <td>Good fit for small local metadata stores.</td>
+          </tr>
+          <tr>
+            <td>SHA256 over 2.29 MB source tree</td>
+            <td>130 ms</td>
+            <td>Fine for small artifacts.</td>
+          </tr>
+          <tr>
+            <td>gzip over 2.29 MB source tree</td>
+            <td>322 ms</td>
+            <td>Usable, but schedule larger runs.</td>
+          </tr>
+          <tr>
+            <td>Diff generation</td>
+            <td>685 ms</td>
+            <td>Usable, size-sensitive.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>On a larger generated corpus with 1,600 source files and 16,000 JSONL rows, <code>rg</code> source search still landed around 106 ms. JSONL parsing, SQLite index work, hashing, and compression became noticeable but still usable. This supports the idea that the board can be an autonomous lab node even when heavyweight language-model inference is remote.</p>
+
+    <h2>Runtime fit still matters</h2>
+    <p>The ONNX Runtime work stays relevant here. Default ORT 1.18 runs many fp32, <code>MatMulInteger</code>, QLinear, and QDQ graphs, but fails mixed/signed <code>ConvInteger</code>. SpacemiT ORT 1.24 closes that operator-coverage gap, but it is not universally faster. Model fit depends on graph form, dtype, runtime version, and linked library.</p>
+
+    <p>Thread count is similarly workload-specific. Vosk and the full scratch CTC speech pipeline favored 2 threads. Some synthetic encoder shapes favored 4. Larger batched encoder shapes can shift again. The board rewards measuring the complete pipeline, not assuming all cores is best.</p>
+
+    <h2>MiniLM embeddings</h2>
+    <p>The most useful new data point is real embedding throughput. The benchmark used <code>sentence-transformers/all-MiniLM-L6-v2</code> ONNX with WordPiece tokenization, ONNX inference, mean pooling, and L2 normalization.</p>
+
+    <ul>
+      <li>fp32 ONNX: 90.4 MB</li>
+      <li>int8 ONNX: 23.0 MB</li>
+      <li>embedding dimension: 384</li>
+      <li>int8 was consistently about 2.0-2.8x faster than fp32</li>
+    </ul>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Batch</th>
+            <th>Seq</th>
+            <th>fp32</th>
+            <th>int8</th>
+            <th>int8 texts/s</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>32</td>
+            <td>98 ms</td>
+            <td>41 ms</td>
+            <td>24.29</td>
+          </tr>
+          <tr>
+            <td>1</td>
+            <td>128</td>
+            <td>321 ms</td>
+            <td>139 ms</td>
+            <td>7.22</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>32</td>
+            <td>607 ms</td>
+            <td>219 ms</td>
+            <td>36.46</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>128</td>
+            <td>2,424 ms</td>
+            <td>939 ms</td>
+            <td>8.52</td>
+          </tr>
+          <tr>
+            <td>32</td>
+            <td>32</td>
+            <td>2,005 ms</td>
+            <td>844 ms</td>
+            <td>37.91</td>
+          </tr>
+          <tr>
+            <td>32</td>
+            <td>128</td>
+            <td>8,232 ms</td>
+            <td>3,725 ms</td>
+            <td>8.59</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This no longer needs much hedging: MiniLM-style embeddings are a good fit for background indexing, local search preparation, note indexing, semantic cache construction, and small RAG utilities. They are not a good fit for a high-QPS interactive embedding service.</p>
+
+    <p>Short chunks fit much better than long chunks. Batch 8 to 32 at sequence length 32 reached roughly 36-38 texts per second. Sequence length 128 fell to about 8-9 texts per second at larger batches. Sequence length 256 was slower again.</p>
+
+    <h2>Embedding thread count</h2>
+    <p>The int8 embedding thread sweep used batch 8 and sequence length 128. Four threads won this shape; eight threads regressed badly.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Threads</th>
+            <th>Median</th>
+            <th>Texts/s</th>
+            <th>Tokens/s</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>1,617 ms</td>
+            <td>4.95</td>
+            <td>633.5</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>833 ms</td>
+            <td>9.60</td>
+            <td>1,229.4</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>705 ms</td>
+            <td>11.34</td>
+            <td>1,451.6</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td>1,400 ms</td>
+            <td>5.72</td>
+            <td>731.5</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This matches the broader thread-scaling lesson: do not default to all cores. The right setting depends on the workload shape and the rest of the application.</p>
+
+    <h2>Fit map</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Workload</th>
+            <th>Fit</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Source search with <code>rg</code></td>
+            <td>Good</td>
+            <td>Fast and scales well on generated corpora.</td>
+          </tr>
+          <tr>
+            <td>JSON/log parsing</td>
+            <td>Good to usable</td>
+            <td>Interactive at small sizes, noticeable at larger sizes.</td>
+          </tr>
+          <tr>
+            <td>SQLite metadata</td>
+            <td>Good to usable</td>
+            <td>Fine for small local indexes; index-build cost matters.</td>
+          </tr>
+          <tr>
+            <td>Checksums/compression</td>
+            <td>Good for small artifacts</td>
+            <td>Larger runs should stay out of latency-critical loops.</td>
+          </tr>
+          <tr>
+            <td>Diff generation</td>
+            <td>Usable</td>
+            <td>Can become a latency hotspot with large diffs.</td>
+          </tr>
+          <tr>
+            <td>STT command/listener path</td>
+            <td>Usable, runtime-sensitive</td>
+            <td>Works with careful model choice and thread count.</td>
+          </tr>
+          <tr>
+            <td>MiniLM-style embeddings</td>
+            <td>Good for background indexing</td>
+            <td>Real int8 ONNX reaches about 36-38 short texts/s at larger batches.</td>
+          </tr>
+          <tr>
+            <td>Quantized conv-heavy ONNX</td>
+            <td>Runtime-sensitive</td>
+            <td><code>ConvInteger</code> dtype form can decide load success.</td>
+          </tr>
+          <tr>
+            <td>Large local generative LLM</td>
+            <td>Poor primary fit</td>
+            <td>Better treated as remote inference or a larger-board workload.</td>
+          </tr>
+          <tr>
+            <td>Packed int4 hot compute</td>
+            <td>Poor unless fused</td>
+            <td>Int4 unpack/sign work erased expected wins in local probes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Conclusion</h2>
+    <p>The RV2 is best treated as a small autonomous compute node, not a miniature desktop and not a magic NPU box. It is good at practical local utility work and interesting for CPU/RVV inference experiments. It is also sensitive to runtime, thread count, export format, and workload shape.</p>
+
+    <p>The next useful embedding datapoint is a comparison against E5-small or BGE-small for quality and export/runtime behavior. MiniLM already shows the workload class is viable on this board when expectations are set correctly.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
