@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Orange Pi RV2 Is Not a Raspberry Pi Killer | RISC-V Agent Lab</title>
+  <meta name="description" content="A practical Orange Pi RV2 vs Raspberry Pi 400 comparison across appliance pipelines, ordinary CPU primitives, int8 embeddings, and explicit vector dot kernels.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Board comparison</p>
+    <h1>The Orange Pi RV2 is not a Raspberry Pi killer</h1>
+    <p class="lede">It might still be a pretty good binary stream appliance. The latest RV2 vs Pi 400 results make the picture narrower and more useful: the Pi 400 wins most ordinary CPU work, but the RV2 can be competitive when the job is fixed-format, linear, and close to the workloads RVV or quantized inference can help.</p>
+
+    <h2>The useful claim</h2>
+    <p>The RV2 is not a broadly faster small Linux computer than a Raspberry Pi 400. The Pi 400 is much stronger on ordinary scalar, branchy, text-heavy, and library-heavy work. But the RV2 is not useless, and the interesting part is not trying to pretend it is a Pi replacement.</p>
+
+    <p>The useful niche looks like this: fixed binary stream gateways, quantized inference experiments, local embedding/search workloads, and RISC-V/RVV development where the board itself is the point.</p>
+
+    <h2>Appliance pipelines</h2>
+    <p>The newest benchmark tested boring appliance-style pipelines instead of isolated primitives: a framed stream gateway, a log redactor, an audio front-end/VAD pass, and a binary protocol bridge. The framed stream gateway is the result that matters most.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Pipeline</th>
+            <th>RV2 rate</th>
+            <th>Pi 400 rate</th>
+            <th>Pi speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Framed stream gateway + CRC/filter</td>
+            <td>54.6 MB/s</td>
+            <td>55.8 MB/s</td>
+            <td>1.02x</td>
+          </tr>
+          <tr>
+            <td>Log redaction state machine</td>
+            <td>79.1 MB/s</td>
+            <td>136.4 MB/s</td>
+            <td>1.72x</td>
+          </tr>
+          <tr>
+            <td>Audio front-end/VAD</td>
+            <td>48.6 M samples/s</td>
+            <td>178.2 M samples/s</td>
+            <td>3.66x</td>
+          </tr>
+          <tr>
+            <td>Binary protocol to JSON-ish output</td>
+            <td>37.8 MB/s</td>
+            <td>91.0 MB/s</td>
+            <td>2.41x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The framed stream gateway is essentially tied. That shape is a credible RV2 fit: regular binary frames, linear buffer traversal, simple validation, CRC, filtering, and payload copy. The other pipelines favor Pi 400 because they add branchy text scanning, formatting, or scalar DSP that has not been tuned for RVV.</p>
+
+    <h2>What that means</h2>
+    <p>The best non-ML RV2 appliance candidate is narrower than "stream processing." It is more like "fixed binary framed stream processing."</p>
+
+    <ul>
+      <li>Good candidates: serial/CAN/RS485 binary gateway, binary log forwarder, packet/frame validator, data-diode-style framed transport, checksum/filter/copy appliance.</li>
+      <li>Less compelling against a Pi 400: text log redaction, JSON transformation, scalar audio DSP without tuned RVV kernels, parser-heavy or formatter-heavy bridges.</li>
+    </ul>
+
+    <h2>Ordinary primitives explain the gap</h2>
+    <p>The run-of-the-mill primitive suite explains why the Pi 400 wins so many general workloads. It covers common native operations below Python, ONNX, SQLite, and shell tools: libc scans, parsing, ASCII classification, function calls, allocation, vDSO/syscall calls, sorting, hashing, and atomics.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Primitive</th>
+            <th>RV2 rate</th>
+            <th>Pi 400 rate</th>
+            <th>Winner</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Parse decimal integers from text</td>
+            <td>218.9 MB/s</td>
+            <td>407.2 MB/s</td>
+            <td>Pi 400</td>
+          </tr>
+          <tr>
+            <td>ASCII classify</td>
+            <td>119.3 MB/s</td>
+            <td>439.8 MB/s</td>
+            <td>Pi 400</td>
+          </tr>
+          <tr>
+            <td>Function-call loop</td>
+            <td>144.6 M calls/s</td>
+            <td>299.7 M calls/s</td>
+            <td>Pi 400</td>
+          </tr>
+          <tr>
+            <td>malloc/free 256-byte blocks</td>
+            <td>11.8 M allocs/s</td>
+            <td>20.7 M allocs/s</td>
+            <td>Pi 400</td>
+          </tr>
+          <tr>
+            <td>FNV-1a byte hash</td>
+            <td>158.3 MB/s</td>
+            <td>298.8 MB/s</td>
+            <td>Pi 400</td>
+          </tr>
+          <tr>
+            <td>Equal <code>memcmp</code></td>
+            <td>158.1 GB/s</td>
+            <td>131.9 GB/s</td>
+            <td>RV2</td>
+          </tr>
+          <tr>
+            <td><code>getpid</code> syscall</td>
+            <td>3.72 M calls/s</td>
+            <td>2.20 M calls/s</td>
+            <td>RV2</td>
+          </tr>
+          <tr>
+            <td>Contended relaxed atomic add</td>
+            <td>52.0 M ops/s</td>
+            <td>19.9 M ops/s</td>
+            <td>RV2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The pattern is not "Pi wins everything." The RV2 has isolated wins in ordinary native operations. But the Pi 400 has a broad advantage on scalar, branchy, text-processing, allocation-heavy, and library-heavy loops. That is why the Pi 400 wins so strongly on general utility work around a model: source search, JSON parsing, SQLite setup, diffing, compression, and hashing all draw from those building blocks.</p>
+
+    <h2>Embeddings are closer</h2>
+    <p>The comparison changes when a real int8 embedding model dominates the workload. For MiniLM embeddings, the Pi 400 still wins many points, but not by the 3-7x margin seen on general utility work.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>MiniLM int8 shape</th>
+            <th>RV2 throughput</th>
+            <th>Pi 400 throughput</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>batch 1, seq 32</td>
+            <td>24.29 texts/s</td>
+            <td>32.39 texts/s</td>
+          </tr>
+          <tr>
+            <td>batch 1, seq 128</td>
+            <td>7.22 texts/s</td>
+            <td>8.04 texts/s</td>
+          </tr>
+          <tr>
+            <td>batch 8, seq 128</td>
+            <td>8.52 texts/s</td>
+            <td>8.20 texts/s</td>
+          </tr>
+          <tr>
+            <td>batch 32, seq 128</td>
+            <td>8.59 texts/s</td>
+            <td>8.40 texts/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>In a simple local-search pipeline, the Pi 400 won end-to-end by about 1.2x, not 4x or 5x. Embedding dominated the runtime, so the RV2's narrower int8 competitiveness survived the surrounding SQLite and top-k search work.</p>
+
+    <h2>RVV helps, but it is not magic</h2>
+    <p>The explicit vector dot benchmark gives a useful hardware/software split. With scalar vectorization disabled, the Pi 400 was about 4.4-4.6x faster than RV2 on a simple int8 multiply-accumulate loop. GCC also emitted useful NEON for the Pi auto-vectorized loop, while the RV2 auto-vectorized loop stayed near scalar speed.</p>
+
+    <p>When driven directly with RVV intrinsics, the RV2 jumped from roughly 0.19 GMAC/s scalar to about 2.3-2.8 GMAC/s. That is a real 12-14x improvement over scalar. But the Pi 400's explicit NEON path still reached about 5.0 GMAC/s, roughly 1.9-2.1x faster than the simple RVV dot kernel.</p>
+
+    <p>The lesson is narrow and useful: explicit RVV can turn a bad scalar path into a real vector kernel, but the Pi 400 remains a strong ARM/NEON baseline. RVV work needs actual kernels, not hope that the compiler will find every pattern.</p>
+
+    <h2>Practical conclusion</h2>
+    <p>The RV2 is not a Raspberry Pi 400 replacement if the goal is general-purpose Linux speed. The Pi 400 is better for most ordinary CPU work and much better for text-heavy utility tasks.</p>
+
+    <p>The RV2 is still worth caring about. It is a useful RISC-V/RVV development board, a credible platform for quantized inference experiments, a surprisingly competitive MiniLM/local-search node, and a plausible fixed-binary stream appliance when the workload is linear, framed, and mostly validation/copy/checksum.</p>
+
+    <p>That is a smaller claim than "Raspberry Pi killer." It is also a more useful one.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
