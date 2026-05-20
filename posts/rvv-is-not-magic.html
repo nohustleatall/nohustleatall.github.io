@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RVV Is Not Magic | RISC-V Agent Lab</title>
+  <meta name="description" content="Practical notes on when RISC-V Vector Extension work actually helps on Orange Pi RV2, based on int8 dot, matmul reuse, int4, embeddings, and appliance pipeline results.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">RVV notes</p>
+    <h1>RVV is not magic</h1>
+    <p class="lede">The RISC-V Vector Extension is real and useful on the Orange Pi RV2. It also does not make the whole board fast. The latest measurements point to a narrower rule: RVV pays when the kernel is regular, explicit, reuse-heavy, and exported into a runtime path that actually uses it.</p>
+
+    <h2>The misconception</h2>
+    <p>It is easy to talk about RVV as if it were a general acceleration switch. That is not what the measurements show. Text parsing, formatting, pointer-heavy work, filesystem traversal, scalar DSP, and ordinary Linux utility tasks still tend to favor the Pi 400 by a wide margin. RVV does not rescue those workloads just by existing.</p>
+
+    <p>Where RVV becomes interesting is more specific: explicit int8 kernels, dense quantized inference, some MiniLM embedding shapes, and linear binary stream work where the CPU can keep moving predictably through memory.</p>
+
+    <h2>Auto-vectorization was not enough</h2>
+    <p>The first int8 dot benchmark separated three things: scalar performance, compiler auto-vectorization, and explicit vector intrinsics. On this loop, the RV2 compiler did not discover the useful RVV path. The Pi 400 compiler did find a useful NEON path.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>K</th>
+            <th>RV2 scalar</th>
+            <th>RV2 auto</th>
+            <th>RVV intrinsic</th>
+            <th>NEON intrinsic</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>256</td>
+            <td>0.197 GMAC/s</td>
+            <td>0.189 GMAC/s</td>
+            <td>2.313 GMAC/s</td>
+            <td>4.949 GMAC/s</td>
+          </tr>
+          <tr>
+            <td>1,024</td>
+            <td>0.198 GMAC/s</td>
+            <td>0.197 GMAC/s</td>
+            <td>2.667 GMAC/s</td>
+            <td>5.096 GMAC/s</td>
+          </tr>
+          <tr>
+            <td>4,096</td>
+            <td>0.197 GMAC/s</td>
+            <td>0.197 GMAC/s</td>
+            <td>2.786 GMAC/s</td>
+            <td>5.328 GMAC/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Explicit RVV turned an unusably slow scalar path into a real vector kernel: roughly 12-14x faster than RV2 scalar. But the explicit NEON kernel on Pi 400 was still about 1.9-2.1x faster than the simple RVV dot kernel. That is the right level of claim: RVV helps a lot versus RV2 scalar, but it does not automatically beat a mature ARM/NEON baseline.</p>
+
+    <h2>Reuse helps, but does not change the story</h2>
+    <p>A plain dot kernel is pessimistic for matrix multiply because it pays a horizontal reduction cost for every output. A more realistic kernel should reuse the loaded activation vector across multiple output columns. The follow-up 1x4 tile test checked exactly that.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Shape</th>
+            <th>RVV dot</th>
+            <th>RVV 1x4</th>
+            <th>RVV gain</th>
+            <th>NEON 1x4</th>
+            <th>NEON/RVV</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1x4x256</td>
+            <td>2.224</td>
+            <td>2.630</td>
+            <td>1.18x</td>
+            <td>5.114</td>
+            <td>1.94x</td>
+          </tr>
+          <tr>
+            <td>4x4x256</td>
+            <td>2.260</td>
+            <td>2.799</td>
+            <td>1.24x</td>
+            <td>5.307</td>
+            <td>1.90x</td>
+          </tr>
+          <tr>
+            <td>1x4x1024</td>
+            <td>2.634</td>
+            <td>2.951</td>
+            <td>1.12x</td>
+            <td>5.623</td>
+            <td>1.91x</td>
+          </tr>
+          <tr>
+            <td>4x4x1024</td>
+            <td>2.659</td>
+            <td>2.991</td>
+            <td>1.12x</td>
+            <td>5.693</td>
+            <td>1.90x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Reuse matters. The RVV 1x4 kernel improved by about 12-24% on actual multi-output shapes. But that modest reuse did not close the NEON gap in this simple implementation. The dot benchmark was somewhat pessimistic, not fundamentally misleading.</p>
+
+    <h2>Int4 was not a free win</h2>
+    <p>The low-bit GEMM experiments showed another useful boundary. Int4 values expanded to int8 compute at roughly int8 speed, but packed int4 in the hot loop lost because unpack and sign-adjust overhead dominated. A direct packed-nibble RVV dot was correct, but still much slower than int8 RVV on the tested ASR-like shapes.</p>
+
+    <p>For this board, int8 is the first serious optimization target. Packed int4 can still matter for storage or load-time compression, but it should not be assumed to accelerate compute unless the kernel avoids paying unpack cost repeatedly.</p>
+
+    <h2>Where RVV-style work did help</h2>
+    <p>The positive cases have a pattern.</p>
+
+    <ul>
+      <li>Explicit RVV int8 dot made RV2 much faster than its scalar path.</li>
+      <li>MiniLM int8 embeddings stayed much closer to Pi 400 than general CPU utilities did.</li>
+      <li>The local-search pipeline stayed within roughly 20-25% of Pi 400 because embedding dominated the runtime.</li>
+      <li>A framed binary stream gateway tied Pi 400 because the pipeline was linear, fixed-format, and mostly validation/copy/checksum.</li>
+      <li>Some quantized ONNX dense shapes landed well enough that RV2 could narrow the gap or even slightly win a specific <code>QLinearMatMul</code> shape.</li>
+    </ul>
+
+    <p>Those are not random wins. They are workloads with regular memory access, predictable loops, useful batching or reuse, and less time spent in branchy text or formatting code.</p>
+
+    <h2>Where RVV did not rescue the board</h2>
+    <p>The negative cases are just as important. Pi 400 stayed well ahead on decimal parsing, ASCII classification, function-call-heavy loops, allocation churn, byte hashing, source search, JSON parsing, diff generation, filesystem-ish tasks, and scalar audio front-end code that was not explicitly vectorized.</p>
+
+    <p>That is why "RVV exists" is not a sufficient performance plan. A workload can be CPU-bound and still be a poor RVV target.</p>
+
+    <h2>Practical checklist</h2>
+    <p>Use RVV when the kernel has most of these properties:</p>
+
+    <ul>
+      <li>regular contiguous loads and stores;</li>
+      <li>enough K or loop length to amortize setup;</li>
+      <li>multiple outputs, batching, or other data reuse;</li>
+      <li>predictable control flow;</li>
+      <li>checksum-verifiable output;</li>
+      <li>an implementation path that actually emits RVV instructions.</li>
+    </ul>
+
+    <p>Be skeptical when the workload is mostly text parsing, formatting, pointer chasing, small unpredictable branches, filesystem traversal, or packed low-bit compute that must unpack inside the hot loop.</p>
+
+    <h2>Conclusion</h2>
+    <p>RVV is worth using on the RV2, but it is not magic and it is not automatic. The current compiler stack did not find the useful int8 vector path in plain C. Explicit intrinsics worked and helped a lot, but a simple NEON baseline on Pi 400 was still faster for the same int8 primitive.</p>
+
+    <p>The most productive way to use this board is to treat RVV as a kernel-design tool, not a marketing feature. Pick regular, batched, reuse-heavy work; prove scalar correctness first; write or choose a runtime path that actually uses RVV; then measure the full pipeline.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
