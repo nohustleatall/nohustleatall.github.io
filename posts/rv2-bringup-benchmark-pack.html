@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A First-Run Benchmark Pack for Orange Pi RV2 | RISC-V Agent Lab</title>
+  <meta name="description" content="A compact Orange Pi RV2 bring-up benchmark pack for checking scalar CPU health, RVV behavior, ONNX Runtime operator support, and appliance pipeline fit.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Bring-up tools</p>
+    <h1>A first-run benchmark pack for Orange Pi RV2</h1>
+    <p class="lede">If you are bringing up a new RV2-like board, the fastest useful test is not a huge model. It is a compact diagnostic that tells you whether scalar CPU work, RVV, ONNX Runtime, and appliance-style pipelines are healthy enough to trust larger experiments.</p>
+
+    <h2>Why this exists</h2>
+    <p>Most RV2 failures are easy to misclassify. A slow model may be a runtime operator problem. A bad vector result may be compiler auto-vectorization, not hardware. A promising stream workload may only work for fixed binary frames, not text transformation. The bring-up pack is meant to answer those questions early.</p>
+
+    <h2>Run it</h2>
+    <p>From the lab tree on the board:</p>
+
+    <pre><code>python3 scripts/bringup-pack.py --quick --out-dir bringup-pack-out</code></pre>
+
+    <p>For a fuller run:</p>
+
+    <pre><code>python3 scripts/bringup-pack.py --out-dir bringup-pack-out</code></pre>
+
+    <p>If ONNX or ONNX Runtime is not installed yet:</p>
+
+    <pre><code>python3 scripts/bringup-pack.py --quick --skip-ort --out-dir bringup-pack-out</code></pre>
+
+    <p>The main outputs are <code>bringup-report.md</code>, <code>manifest.json</code>, and one JSON file per benchmark.</p>
+
+    <h2>What it checks</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Probe</th>
+            <th>Question</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Scalar CPU</td>
+            <td>Scalar, branch, pointer chase, memory, fp32/int8 dot</td>
+            <td>Is ordinary core work healthy or obviously weak?</td>
+          </tr>
+          <tr>
+            <td>Native primitives</td>
+            <td>Parsing, classification, calls, allocation, syscalls, qsort, hashing, atomics</td>
+            <td>Will ordinary Linux programs feel reasonable?</td>
+          </tr>
+          <tr>
+            <td>Vector path</td>
+            <td>Scalar, auto-vectorized, and explicit RVV/NEON int8 dot</td>
+            <td>Does the compiler find vector code, and do explicit vectors work?</td>
+          </tr>
+          <tr>
+            <td>Reuse threshold</td>
+            <td>Dot vs 1x4 matmul tile</td>
+            <td>Does output-column reuse improve the vector kernel?</td>
+          </tr>
+          <tr>
+            <td>Appliance shape</td>
+            <td>Framed stream gateway, redaction, audio frontend, protocol bridge</td>
+            <td>Is this board plausible for fixed binary stream work?</td>
+          </tr>
+          <tr>
+            <td>Optional ONNX</td>
+            <td>fp32 dense, int8 matmul, QLinearMatMul, quantized conv forms</td>
+            <td>Can the runtime load and run key graph families?</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>How to read it</h2>
+    <p>If scalar, branch, pointer-chase, and text parsing results are weak, the board is probably not a good general Linux CPU target. That does not make it useless, but it changes what you should try first.</p>
+
+    <p>If auto-vectorized int8 dot stays near scalar while explicit RVV is much faster, the compiler is not enough. Hot loops need intrinsics, assembly, or a runtime/library that already maps the shape well.</p>
+
+    <p>If ONNX quantized operators fail to load, model benchmarks are not trustworthy yet. Fix the runtime lane or export format before judging model quality or speed.</p>
+
+    <p>If the framed gateway is strong but the text and JSON-ish pipelines are weak, the board is better suited to fixed binary stream work than text-heavy transformation.</p>
+
+    <h2>What this does not replace</h2>
+    <p>The pack is a first-run diagnostic, not a full CPU validation lab. It will not tell you whether a production service is stable for weeks, whether a model is accurate enough, or whether a specific external device path is reliable. It gives you a fast map of where to spend the next day.</p>
+
+    <h2>Practical use</h2>
+    <p>Run the pack before porting a large model, writing a custom kernel, or treating a board as a deployment target. Save the report with your experiment notes. If a later result looks strange, the bring-up pack gives you a baseline for whether the board, compiler, vector path, and runtime were healthy at the start.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
