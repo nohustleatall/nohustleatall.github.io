@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A 12-Hour Streaming Data Appliance on Orange Pi RV2 | RISC-V Agent Lab</title>
+  <meta name="description" content="A 12-hour Orange Pi RV2 streaming data appliance run ingesting Nostr relays and Coinbase trades into aggregate SQLite features with a dashboard.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Appliance notes</p>
+    <h1>A 12-hour streaming data appliance on Orange Pi RV2</h1>
+    <p class="lede">The Orange Pi RV2 is not impressive as a general scalar CPU, but it is credible as a low-power streaming aggregate appliance. In a 12-hour run, it handled eight Nostr relays plus three Coinbase trade streams, persisted aggregate features to SQLite, served a dashboard, and stayed well below one core of CPU.</p>
+
+    <h2>The useful result</h2>
+    <p>The important result is not that Nostr mentions predict crypto prices. They do not, at least not from naive counts. The useful result is that the board can comfortably reduce many live public streams into compact rolling features. For this workload, the hard part becomes signal design rather than ingest capacity.</p>
+
+    <h2>What the appliance does</h2>
+    <p>The prototype subscribes to public streams, discards raw messages quickly, keeps rolling counters and baselines, writes compact aggregate rows, and exposes a small read-only dashboard.</p>
+
+    <ul>
+      <li>Eight Nostr relays.</li>
+      <li>Coinbase BTCUSD, ETHUSD, and SOLUSD trade streams.</li>
+      <li>SQLite WAL persistence with aggregate-only rows.</li>
+      <li>No raw posts, raw trade messages, or pubkeys stored.</li>
+      <li>Rolling term counts and unique-author counts.</li>
+      <li>Baseline ratio, velocity, acceleration, z-score, and quality score.</li>
+      <li>Suppression for high-count low-diversity noise.</li>
+      <li>BTC/ETH/SOL topic co-mentions and hourly rollups.</li>
+      <li>A dashboard and CLI summary helper for inspection.</li>
+    </ul>
+
+    <h2>The 12-hour run</h2>
+    <p>The strongest run lasted almost exactly 12 hours. It used one-minute buckets and aggregate storage.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Duration</td>
+            <td>43,202.66 s</td>
+          </tr>
+          <tr>
+            <td>Buckets</td>
+            <td>719</td>
+          </tr>
+          <tr>
+            <td>Nostr events</td>
+            <td>6,501,055</td>
+          </tr>
+          <tr>
+            <td>Nostr events/s</td>
+            <td>150.48</td>
+          </tr>
+          <tr>
+            <td>Nostr bytes</td>
+            <td>5.85 GB</td>
+          </tr>
+          <tr>
+            <td>Coinbase trades</td>
+            <td>557,540</td>
+          </tr>
+          <tr>
+            <td>Coinbase trades/s</td>
+            <td>12.91</td>
+          </tr>
+          <tr>
+            <td>Alerts</td>
+            <td>891</td>
+          </tr>
+          <tr>
+            <td>SQLite DB size</td>
+            <td>19 MiB</td>
+          </tr>
+          <tr>
+            <td>CPU fraction</td>
+            <td>0.29 of one core</td>
+          </tr>
+          <tr>
+            <td>Max RSS</td>
+            <td>50.5 MiB</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The database stayed compact because it stored aggregate rows, not raw event archives.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th>Rows</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>buckets</code></td>
+            <td>719</td>
+          </tr>
+          <tr>
+            <td><code>term_counts</code></td>
+            <td>112,101</td>
+          </tr>
+          <tr>
+            <td><code>symbol_features</code></td>
+            <td>2,157</td>
+          </tr>
+          <tr>
+            <td><code>topic_features</code></td>
+            <td>2,408</td>
+          </tr>
+          <tr>
+            <td><code>alerts</code></td>
+            <td>891</td>
+          </tr>
+          <tr>
+            <td><code>relay_stats</code></td>
+            <td>5,752</td>
+          </tr>
+          <tr>
+            <td><code>hourly_rollups</code></td>
+            <td>13</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Signal quality was the hard part</h2>
+    <p>BTC was extremely dense and noisy. ETH and SOL were lower-volume but produced cleaner relative spike scores. Raw mention count alone was not useful.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Mentions</th>
+            <th>Author-bucket sum</th>
+            <th>Max bucket mentions</th>
+            <th>Max quality score</th>
+            <th>Trades</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>BTCUSD</td>
+            <td>439,639</td>
+            <td>31,567</td>
+            <td>1,175</td>
+            <td>0.88</td>
+            <td>278,154</td>
+          </tr>
+          <tr>
+            <td>ETHUSD</td>
+            <td>11,393</td>
+            <td>897</td>
+            <td>130</td>
+            <td>17.80</td>
+            <td>199,431</td>
+          </tr>
+          <tr>
+            <td>SOLUSD</td>
+            <td>2,827</td>
+            <td>558</td>
+            <td>58</td>
+            <td>6.57</td>
+            <td>79,954</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The scoring layer matters because high raw counts can come from repeated templates, domains, or single-source noise. Diversity-adjusted scoring and suppression made smaller ETH/SOL events visible instead of letting BTC volume dominate every view.</p>
+
+    <h2>Why this is an RV2-shaped workload</h2>
+    <p>This is mostly network I/O, JSON parsing, counters, rolling statistics, and compact SQLite writes. It does not need a GPU, NPU, or large local language model. It needs steady ingest, bounded memory, compact persistence, and enough CPU for simple feature logic.</p>
+
+    <p>That fits the RV2 better than many of the workloads where it lost to the Pi 400. It is an always-on reducer: many public streams in, aggregate features out.</p>
+
+    <h2>Dashboard and inspection</h2>
+    <p>The dashboard is deliberately small and framework-free. It reads aggregate SQLite tables and shows latest bucket counts, recent scored alerts, BTC/ETH/SOL panels, top quality-scored terms, suppressed noisy terms, relay health, hourly rollups, and topic co-mentions.</p>
+
+    <p>That matters operationally. A headless appliance still needs a way to answer: is it alive, which relays are healthy, how fast is data arriving, and what is being suppressed?</p>
+
+    <h2>What this is not</h2>
+    <p>This is not a trading strategy. The Nostr/Coinbase experiments showed that naive social mention counts are noisy. The largest first-pass correlations were not enough to treat as market signal, and the better 12-hour appliance output is still heuristic.</p>
+
+    <p>The current scoring uses baseline ratio, z-score, velocity, acceleration, author diversity, mentions per author, and suppression for low-diversity repeated sources. That is useful for exploration, but it is not statistically validated.</p>
+
+    <p>The aggregate-only design is also a tradeoff. It is good for privacy and storage, but it means later forensic analysis cannot inspect raw posts that caused an alert.</p>
+
+    <h2>Practical conclusion</h2>
+    <p>This is the strongest real appliance result so far. The RV2 ran a multi-stream public data reducer for 12 hours with low CPU, low memory, compact storage, live dashboard serving, and enough headroom for more feature logic.</p>
+
+    <p>The next step is not proving ingest again. It is making the appliance production-shaped: configuration, service wrapper, retention policy, alert sinks, dashboard authentication for non-LAN use, and longer unattended runs.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
