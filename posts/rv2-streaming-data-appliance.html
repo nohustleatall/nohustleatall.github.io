@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>A 12-Hour Streaming Data Appliance on Orange Pi RV2 | RISC-V Agent Lab</title>
-  <meta name="description" content="A 12-hour Orange Pi RV2 streaming data appliance run ingesting Nostr relays and Coinbase trades into aggregate SQLite features with a dashboard.">
+  <meta name="description" content="Orange Pi RV2 streaming data appliance runs ingesting Nostr, Bluesky, Coinbase, and Kraken streams into aggregate SQLite features with a dashboard.">
   <link rel="stylesheet" href="../style.css">
 </head>
 <body>
@@ -21,7 +21,7 @@
   <main class="post">
     <p class="eyebrow">Appliance notes</p>
     <h1>A 12-hour streaming data appliance on Orange Pi RV2</h1>
-    <p class="lede">The Orange Pi RV2 is not impressive as a general scalar CPU, but it is credible as a low-power streaming aggregate appliance. In a 12-hour run, it handled eight Nostr relays plus three Coinbase trade streams, persisted aggregate features to SQLite, served a dashboard, and stayed well below one core of CPU.</p>
+    <p class="lede">The Orange Pi RV2 is not impressive as a general scalar CPU, but it is credible as a low-power streaming aggregate appliance. A 12-hour run proved stability, and a later combined run added Bluesky plus crypto order books without getting close to saturating the board.</p>
 
     <h2>The useful result</h2>
     <p>The important result is not that Nostr mentions predict crypto prices. They do not, at least not from naive counts. The useful result is that the board can comfortably reduce many live public streams into compact rolling features. For this workload, the hard part becomes signal design rather than ingest capacity.</p>
@@ -31,7 +31,9 @@
 
     <ul>
       <li>Eight Nostr relays.</li>
-      <li>Coinbase BTCUSD, ETHUSD, and SOLUSD trade streams.</li>
+      <li>Coinbase and Kraken crypto trade streams.</li>
+      <li>Optional Coinbase and Kraken order-book aggregate buckets.</li>
+      <li>Optional Bluesky Jetstream aggregate buckets.</li>
       <li>SQLite WAL persistence with aggregate-only rows.</li>
       <li>No raw posts, raw trade messages, or pubkeys stored.</li>
       <li>Rolling term counts and unique-author counts.</li>
@@ -190,8 +192,105 @@
 
     <p>The scoring layer matters because high raw counts can come from repeated templates, domains, or single-source noise. Diversity-adjusted scoring and suppression made smaller ETH/SOL events visible instead of letting BTC volume dominate every view.</p>
 
+    <h2>The combined stress run</h2>
+    <p>The later scale test turned on the useful public sources together: Nostr relays, Bluesky Jetstream, Coinbase trades, Coinbase order books, Kraken order books, aggregate SQLite persistence, and the dashboard. It ran for 30 minutes with one-minute buckets.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Duration</td>
+            <td>1,804 s</td>
+          </tr>
+          <tr>
+            <td>Nostr events</td>
+            <td>45,061 / 48.5 MB</td>
+          </tr>
+          <tr>
+            <td>Bluesky events</td>
+            <td>81,875 / 70.0 MB</td>
+          </tr>
+          <tr>
+            <td>Crypto trades</td>
+            <td>15,211 / 4.38 MB</td>
+          </tr>
+          <tr>
+            <td>Alerts</td>
+            <td>20</td>
+          </tr>
+          <tr>
+            <td>SQLite DB size</td>
+            <td>940 KiB</td>
+          </tr>
+          <tr>
+            <td>CPU fraction</td>
+            <td>0.18 of one core</td>
+          </tr>
+          <tr>
+            <td>Max RSS</td>
+            <td>55.9 MiB</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Bluesky Jetstream was the best social firehose in this pass: simple JSON, no authentication requirement for the tested feed, and more events than Nostr during the same run. Order books were the best structured-data stress source because they produce many level updates, not just occasional trade prints.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Order-book source</th>
+            <th>Messages</th>
+            <th>Bytes</th>
+            <th>Level updates</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Coinbase BTCUSD</td>
+            <td>29,072</td>
+            <td>17.26 MB</td>
+            <td>458,231</td>
+          </tr>
+          <tr>
+            <td>Coinbase ETHUSD</td>
+            <td>23,945</td>
+            <td>9.55 MB</td>
+            <td>238,039</td>
+          </tr>
+          <tr>
+            <td>Coinbase SOLUSD</td>
+            <td>22,713</td>
+            <td>4.91 MB</td>
+            <td>91,902</td>
+          </tr>
+          <tr>
+            <td>Kraken ETHUSD</td>
+            <td>39,408</td>
+            <td>7.95 MB</td>
+            <td>61,645</td>
+          </tr>
+          <tr>
+            <td>Kraken SOLUSD</td>
+            <td>22,314</td>
+            <td>4.14 MB</td>
+            <td>24,724</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is the clearest scale result so far. The 12-hour run showed the appliance can stay up and keep storage compact. The combined run showed that the current "everything useful on" mix still does not come close to saturating the RV2.</p>
+
     <h2>Why this is an RV2-shaped workload</h2>
-    <p>This is mostly network I/O, JSON parsing, counters, rolling statistics, and compact SQLite writes. It does not need a GPU, NPU, or large local language model. It needs steady ingest, bounded memory, compact persistence, and enough CPU for simple feature logic.</p>
+    <p>This is mostly network I/O, JSON parsing, counters, rolling statistics, order-book aggregation, and compact SQLite writes. It does not need a GPU, NPU, or large local language model. It needs steady ingest, bounded memory, compact persistence, and enough CPU for simple feature logic.</p>
 
     <p>That fits the RV2 better than many of the workloads where it lost to the Pi 400. It is an always-on reducer: many public streams in, aggregate features out.</p>
 
@@ -208,7 +307,7 @@
     <p>The aggregate-only design is also a tradeoff. It is good for privacy and storage, but it means later forensic analysis cannot inspect raw posts that caused an alert.</p>
 
     <h2>Practical conclusion</h2>
-    <p>This is the strongest real appliance result so far. The RV2 ran a multi-stream public data reducer for 12 hours with low CPU, low memory, compact storage, live dashboard serving, and enough headroom for more feature logic.</p>
+    <p>This is the strongest real appliance result so far. The RV2 ran a multi-stream public data reducer for 12 hours with low CPU, low memory, compact storage, live dashboard serving, and enough headroom for more feature logic. Then it handled a denser combined Nostr, Bluesky, trade, and order-book mix at only 0.18 of one core.</p>
 
     <p>The next step is not proving ingest again. It is making the appliance production-shaped: configuration, service wrapper, retention policy, alert sinks, dashboard authentication for non-LAN use, and longer unattended runs.</p>
   </main>
