@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Orange Pi RV2 Makes a Good Always-On Data Appliance | RISC-V Agent Lab</title>
+  <meta name="description" content="A six-hour Orange Pi RV2 soak ran AISStream, Nostr, Bluesky Jetstream, crypto markets, order books, and government metadata polling while staying far below one CPU core.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">Appliance notes</p>
+    <h1>The Orange Pi RV2 makes a good always-on data appliance</h1>
+    <p class="lede">The Orange Pi RV2 is not a faster Raspberry Pi for ordinary Linux work. Its more interesting niche is quieter: keep many public data feeds open, reduce them into compact aggregate state, and leave enough CPU and memory headroom for the machine to run unattended.</p>
+
+    <h2>The question</h2>
+    <p>After the earlier stream-appliance prototype survived 12 hours of Nostr and crypto aggregation, I wanted a more realistic mixed workload. Could the board run multiple live WebSocket feeds, market order-book aggregation, and periodic public-data polling at the same time without turning into a one-core bottleneck?</p>
+
+    <p>The six-hour soak answered that clearly enough to change how I think about the board. This is not a general-purpose server story. It is an edge reducer story.</p>
+
+    <h2>What ran</h2>
+    <p>The soak combined three branches that would normally be tested separately:</p>
+
+    <ul>
+      <li>A Rust AISStream client receiving live global ship-position-style messages and keeping aggregate counters.</li>
+      <li>The Python stream appliance processing Nostr, Bluesky Jetstream, Coinbase/Kraken trades, and Coinbase/Kraken order books into SQLite feature buckets.</li>
+      <li>A periodic open-government metadata sweep polling NWS, USGS, FIRMS, NEXRAD, and GOES-style sources every five minutes.</li>
+    </ul>
+
+    <p>The job deliberately did not archive raw social posts, raw AIS messages, raw trade messages, radar products, or satellite products. It kept compact aggregate rows, counters, feature buckets, and source summaries.</p>
+
+    <h2>The six-hour result</h2>
+    <p>The headline result is simple: all of that ran together for six hours while the steady live workload stayed well below one core.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Branch</th>
+            <th>Work done</th>
+            <th>CPU</th>
+            <th>Memory</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>AISStream Rust client</td>
+            <td>6,327,573 messages, 3.50 GB, 292.9 messages/s</td>
+            <td>4.0% median</td>
+            <td>10.2 MB median RSS</td>
+          </tr>
+          <tr>
+            <td>Main stream appliance</td>
+            <td>Nostr, Jetstream, trades, order books, SQLite buckets</td>
+            <td>15.6% median</td>
+            <td>65.4 MB median RSS</td>
+          </tr>
+          <tr>
+            <td>Government polling</td>
+            <td>72 metadata polls at five-minute intervals</td>
+            <td>brief spikes</td>
+            <td>short-lived process</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The AIS process peaked at 4.7% CPU. The main appliance peaked at 17.6% sampled CPU. The two long-lived live processes together stayed under 100 MB of memory. The aggregate SQLite database was about 8.2 MB at the end.</p>
+
+    <h2>AIS was the surprise</h2>
+    <p>AISStream turned out to be a useful live-data source for this board. It is much larger than the Nostr relay set I had been using, but still cheap after moving the client to Rust.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Messages</td>
+            <td>6,327,573</td>
+          </tr>
+          <tr>
+            <td>Average rate</td>
+            <td>292.9 messages/s</td>
+          </tr>
+          <tr>
+            <td>Bytes</td>
+            <td>3.50 GB</td>
+          </tr>
+          <tr>
+            <td>Parse failures</td>
+            <td>0</td>
+          </tr>
+          <tr>
+            <td>Unique MMSI values</td>
+            <td>45,199</td>
+          </tr>
+          <tr>
+            <td>Connections</td>
+            <td>46</td>
+          </tr>
+          <tr>
+            <td>Pings handled</td>
+            <td>1,449</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The operational lesson was as important as the performance number: public WebSockets reset. The first longer AIS run exposed that immediately. Once the Rust client reconnected and resumed until the target duration expired, the source became a realistic always-on branch rather than a fragile demo.</p>
+
+    <h2>The aggregate database stayed small</h2>
+    <p>The main stream appliance kept one-minute buckets and aggregate-only feature tables. The result is the kind of database size that can be copied, backed up, queried, and inspected without pretending the board is a data lake.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Table</th>
+            <th>Rows after six hours</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>buckets</code></td>
+            <td>360</td>
+          </tr>
+          <tr>
+            <td><code>bsky_features</code></td>
+            <td>360</td>
+          </tr>
+          <tr>
+            <td><code>bsky_term_counts</code></td>
+            <td>35,648</td>
+          </tr>
+          <tr>
+            <td><code>market_features</code></td>
+            <td>2,137</td>
+          </tr>
+          <tr>
+            <td><code>book_features</code></td>
+            <td>1,799</td>
+          </tr>
+          <tr>
+            <td><code>term_counts</code></td>
+            <td>22,885</td>
+          </tr>
+          <tr>
+            <td><code>symbol_features</code></td>
+            <td>1,080</td>
+          </tr>
+          <tr>
+            <td><code>relay_stats</code></td>
+            <td>2,880</td>
+          </tr>
+          <tr>
+            <td><code>alerts</code></td>
+            <td>274</td>
+          </tr>
+          <tr>
+            <td><code>hourly_rollups</code></td>
+            <td>7</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is the part that makes the appliance shape feel practical. The RV2 is not winning by storing everything. It is winning by refusing to store everything.</p>
+
+    <h2>Government data splits into two classes</h2>
+    <p>The public-data sweep was included to test another kind of workload: authoritative feeds and object listings rather than live social or market streams. It split cleanly into signal feeds and bulk object feeds.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Observed shape</th>
+            <th>Appliance role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>NWS active alerts</td>
+            <td>hundreds of active alerts</td>
+            <td>low-volume authoritative event feed</td>
+          </tr>
+          <tr>
+            <td>USGS earthquakes</td>
+            <td>around 200 all-day events</td>
+            <td>low-volume trigger feed</td>
+          </tr>
+          <tr>
+            <td>NASA FIRMS VIIRS</td>
+            <td>tens of thousands of rows</td>
+            <td>good geospatial event feed</td>
+          </tr>
+          <tr>
+            <td>NEXRAD Level II listing</td>
+            <td>first page around 5.9-6.2 GB listed</td>
+            <td>safe to index, expensive to download</td>
+          </tr>
+          <tr>
+            <td>GOES current-hour listing</td>
+            <td>roughly 310-366 MB listed</td>
+            <td>regular heavy object stream</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Metadata polling was safe. Bulk radar and satellite products are different. A board like this can watch those feeds, index them, choose a subset, and enforce byte budgets. It should not blindly download every interesting object just because the listing is easy to fetch.</p>
+
+    <h2>The capacity lesson</h2>
+    <p>The RV2 still has obvious weaknesses. It is not a magic general CPU, and Python hot loops hit limits quickly when the event rate rises into the thousands per second. But this workload is not trying to be a high-QPS service. It is an always-on reducer.</p>
+
+    <p>The practical model now looks like this:</p>
+
+    <ul>
+      <li>Use Python for orchestration, dashboards, experiments, and low-rate polling.</li>
+      <li>Use Rust for high-volume live clients and reducers.</li>
+      <li>Store aggregate rows, not raw firehose archives.</li>
+      <li>Treat NEXRAD, GOES, and similar product feeds as byte-budgeted object streams.</li>
+      <li>Assume public WebSockets will reset, and make reconnect behavior part of the design.</li>
+    </ul>
+
+    <h2>Where this leaves the RV2</h2>
+    <p>This is the clearest practical role I have found for the Orange Pi RV2 so far. It is not a Raspberry Pi replacement for every task. It is a small RISC-V box that can sit on a network, keep many useful public feeds warm, reduce them into privacy-preserving aggregate state, and expose a compact dashboard or database for later analysis.</p>
+
+    <p>That does not make it fast in the abstract. It makes it useful in a specific way: continuous ingest, cheap feature extraction, compact persistence, and enough headroom to stay boring.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
