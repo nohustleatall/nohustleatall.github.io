@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>opencode 1.14.48 Single-File Build on RISC-V | RISC-V Agent Lab</title>
-  <meta name="description" content="Field notes from packaging opencode 1.14.48 as a Linux RISC-V single-file build, preserving the forward-port patch set, and smoke-testing it on Orange Pi RV2.">
+  <title>opencode 1.15.13 Single-File Build on RISC-V | RISC-V Agent Lab</title>
+  <meta name="description" content="Field notes from packaging opencode 1.15.13 as a Linux RISC-V single-file build, preserving the forward-port patch set, and smoke-testing it on Orange Pi RV2.">
   <link rel="stylesheet" href="../style.css">
 </head>
 <body>
@@ -21,34 +21,34 @@
   <main class="post">
     <p class="eyebrow">Cross-lab notes</p>
     <h1>opencode now has a RISC-V single-file package</h1>
-    <p class="lede">The opencode work has moved past the earlier experimental package and now has a second stable forward port. The current 1.14.48 Linux RISC-V tarball has installer support, shell completions, package-local smoke tests, an RV2-validated upstream TUI attach path, and a separate patch bundle that shows the port can move with upstream.</p>
+    <p class="lede">The opencode work has moved past the earlier experimental package and now has a second stable forward port. The current 1.15.13 Linux RISC-V tarball has installer support, shell completions, package-local smoke tests, an RV2-validated upstream TUI attach path, and a separate patch bundle that shows the port can move with upstream.</p>
 
     <h2>Download</h2>
-    <p>The package is published as <code>opencode-1.14.48-linux-riscv64-singlefile.tar.gz</code>. It contains the RISC-V <code>opencode</code> executable, runtime sidecars, native PTY support, the RISC-V Parcel watcher package, shell completions, release notes, build metadata, checksums, and bundled license notices.</p>
+    <p>The package is published as <code>opencode-1.15.13-linux-riscv64-singlefile.tar.gz</code>. It contains the RISC-V <code>opencode</code> executable, runtime sidecars, native PTY support, the RISC-V Parcel watcher package, shell completions, release notes, build metadata, checksums, and bundled license notices.</p>
 
     <p>Download it from the GitHub Release:</p>
 
     <ul class="link-list">
-      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/tag/opencode-1.14.48-linux-riscv64-singlefile">Release page</a></li>
-      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.14.48-linux-riscv64-singlefile/opencode-1.14.48-linux-riscv64-singlefile.tar.gz">opencode-1.14.48-linux-riscv64-singlefile.tar.gz</a></li>
-      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.14.48-linux-riscv64-singlefile/opencode-1.14.48-linux-riscv64-singlefile.tar.gz.sha256">opencode-1.14.48-linux-riscv64-singlefile.tar.gz.sha256</a></li>
-      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.14.48-linux-riscv64-singlefile/opencode-1.14.48-riscv-forward-port.tar.gz">opencode-1.14.48-riscv-forward-port.tar.gz</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/tag/opencode-1.15.13-linux-riscv64-singlefile">Release page</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.15.13-linux-riscv64-singlefile/opencode-1.15.13-linux-riscv64-singlefile.tar.gz">opencode-1.15.13-linux-riscv64-singlefile.tar.gz</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.15.13-linux-riscv64-singlefile/opencode-1.15.13-linux-riscv64-singlefile.tar.gz.sha256">opencode-1.15.13-linux-riscv64-singlefile.tar.gz.sha256</a></li>
+      <li><a href="https://github.com/nohustleatall/codex-riscv-builds/releases/download/opencode-1.15.13-linux-riscv64-singlefile/opencode-1.15.13-riscv-forward-port.tar.gz">opencode-1.15.13-riscv-forward-port.tar.gz</a></li>
     </ul>
 
-    <pre><code>sha256: 4253193f676a984833de152ef8859b4cbfc7f0693754fffc1e921ae912ed9faa
+    <pre><code>sha256: 0f853962b3009ac2719a243a6d3e651c5bdeddad1049794aea6a022d5be67d87
 target: linux-riscv64-gnu
 board class: Orange Pi RV2 / SpacemiT K1 / Ky X1
-opencode: 1.14.48
-upstream source ref: 4d8ac17c263c0e58fb99c25cc636684dffb45a50
-forward-port bundle sha256: 8ca19ecfd2ccec3171a20d0cf63850ca1c89b4ca969d1c9b90a5e7ba18c24450</code></pre>
+opencode: 1.15.13
+upstream source ref: 385cb694419f98103af0e8fc6187ddcbcbb6eecb
+forward-port bundle sha256: bf1f1ee900ab6d8987770936cf01691024103856b14a4302bfaab8f944c5e442</code></pre>
 
     <p>This is a patched RISC-V package, not an official upstream opencode release. The bundled <code>BUILDINFO</code> records dirty source trees for opencode and Bun, so treat the artifact as a practical RV2 build rather than a byte-for-byte rebuild recipe.</p>
 
-    <h2>Why 1.14.48 matters</h2>
-    <p>The useful result is not just a newer tarball. The 1.14.48 package proves the RISC-V work is now a forward-portable patch set instead of a one-off local tree. The release includes <code>opencode-1.14.48-riscv-forward-port.tar.gz</code>, which contains a small entry overlay and a tracked source patch that can be applied to a clean upstream checkout at <code>4d8ac17c263c0e58fb99c25cc636684dffb45a50</code>.</p>
+    <h2>Why 1.15.13 matters</h2>
+    <p>The useful result is not just a newer tarball. The 1.15.13 package proves the RISC-V work is now a forward-portable patch set instead of a one-off local tree. The release includes <code>opencode-1.15.13-riscv-forward-port.tar.gz</code>, which contains a small entry overlay and a tracked source patch that can be applied to a clean upstream checkout at <code>385cb694419f98103af0e8fc6187ddcbcbb6eecb</code>.</p>
 
     <pre><code>tar -C /path/to/opencode -xzf 0001-riscv-entry-overlay.tar.gz
-git -C /path/to/opencode apply 0002-v1.14.48-riscv-source-compat.patch</code></pre>
+git -C /path/to/opencode apply 0002-v1.15.13-riscv-source-compat.patch</code></pre>
 
     <p>That split is the durable part. The overlay carries the RISC-V command entrypoint and diagnostic modules, while the patch carries the compatibility changes: the filesystem export needed by the package path, TUI smoke hooks, clean exit tracing, guarded renderer teardown, plugin runtime tracing, and a smoke-only external plugin skip. When upstream moves, those are the pieces to rebase and re-run through the package smoke.</p>
 
@@ -124,9 +124,9 @@ git -C /path/to/opencode apply 0002-v1.14.48-riscv-source-compat.patch</code></p
     <h2>Install</h2>
     <p>The package can be run in place or installed under a prefix. The installer writes a wrapper that sets <code>LD_LIBRARY_PATH</code> for the bundled runtime sidecars and installs bash, zsh, and fish completions.</p>
 
-    <pre><code>sha256sum -c opencode-1.14.48-linux-riscv64-singlefile.tar.gz.sha256
-tar -xzf opencode-1.14.48-linux-riscv64-singlefile.tar.gz
-cd opencode-1.14.48-linux-riscv64-singlefile
+    <pre><code>sha256sum -c opencode-1.15.13-linux-riscv64-singlefile.tar.gz.sha256
+tar -xzf opencode-1.15.13-linux-riscv64-singlefile.tar.gz
+cd opencode-1.15.13-linux-riscv64-singlefile
 sha256sum -c SHA256SUMS
 ./smoke.sh
 ./install.sh --prefix "$HOME/.local"
