@@ -9,14 +9,14 @@
     "artifacts": "https://github.com/nohustleatall/codex-riscv-builds"
   },
   "latest": {
-    "version": "0.130.0",
+    "version": "0.136.0",
     "target": "riscv64gc-unknown-linux-gnu",
     "board": "Orange Pi RV2 / SpacemiT K1 class boards",
-    "release": "https://github.com/nohustleatall/codex-riscv-builds/releases/tag/v0.130.0-orangepi-rv2-riscv64gc-v8",
-    "binary": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.130.0-orangepi-rv2-riscv64gc-v8/codex-0.130.0-orangepi-rv2-riscv64gc-v8",
-    "sha256": "2b0bb4bf8b65bc8689e0ff407305b434c4f47cc0b99f7436d15ee989f4778152",
-    "checksum_file": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.130.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS",
-    "patch": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.130.0-orangepi-rv2-riscv64gc-v8/codex-rv2-local-changes-0.130.patch"
+    "release": "https://github.com/nohustleatall/codex-riscv-builds/releases/tag/v0.136.0-orangepi-rv2-riscv64gc-v8",
+    "binary": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.136.0-orangepi-rv2-riscv64gc-v8/codex-0.136.0-orangepi-rv2-riscv64gc-v8",
+    "sha256": "c0e74673bbe4fb15a1dba258b1f4514a29ba7bba4c4d15f92d140eca0acb594c",
+    "checksum_file": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.136.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS",
+    "patch": "https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.136.0-orangepi-rv2-riscv64gc-v8/codex-rv2-local-changes-0.136.patch"
   },
   "privacy": {
     "analytics": false,

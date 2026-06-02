@@ -14,7 +14,7 @@
       <a href="/downloads.html">Downloads</a>
       <a href="/posts/orange-pi-rv2-field-notes.html" aria-current="page">RV2 Field Notes</a>
       <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
-      <a href="/posts/codex-0.130-orange-pi-rv2.html">Build Notes</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
     </nav>
   </header>
 
@@ -44,16 +44,16 @@ bwrap --version
     <h2>Install Codex</h2>
     <p>Download the current RISC-V build, verify the checksum, make it executable, and run the version check.</p>
 
-    <pre><code>curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.130.0-orangepi-rv2-riscv64gc-v8/codex-0.130.0-orangepi-rv2-riscv64gc-v8
-curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.130.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS
+    <pre><code>curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.136.0-orangepi-rv2-riscv64gc-v8/codex-0.136.0-orangepi-rv2-riscv64gc-v8
+curl -LO https://github.com/nohustleatall/codex-riscv-builds/releases/download/v0.136.0-orangepi-rv2-riscv64gc-v8/SHA256SUMS
 sha256sum -c SHA256SUMS
-chmod +x codex-0.130.0-orangepi-rv2-riscv64gc-v8
-./codex-0.130.0-orangepi-rv2-riscv64gc-v8 --version
+chmod +x codex-0.136.0-orangepi-rv2-riscv64gc-v8
+./codex-0.136.0-orangepi-rv2-riscv64gc-v8 --version
 </code></pre>
 
     <p>Expected version:</p>
 
-    <pre><code>codex-cli 0.130.0
+    <pre><code>codex-cli 0.136.0
 </code></pre>
 
     <h2>Hardware reality check</h2>
