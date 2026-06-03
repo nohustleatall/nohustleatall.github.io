@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Early K3 Workload-Fit Notes | RISC-V Agent Lab</title>
+  <meta name="description" content="Interim workload-fit notes for the K3 RISC-V board: X100 build work, SpaceMIT INT8 vision, media, GPU/OpenCL, A100/TCM, and current LLM caveats.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 field notes</p>
+    <h1>Early K3 workload-fit notes</h1>
+    <p class="lede">The K3 board is already more practical than the RV2 for normal RISC-V development work. The early evidence also says something less marketable but more useful: it is a strong Linux development and vendor-INT8 computer-vision board, not a general-purpose LLM appliance.</p>
+
+    <h2>Why this is interim</h2>
+    <p>This is a snapshot from the first bring-up and workload-fit pass. Some tracks are strong enough to guide expectations now. Others still need external hardware, permission fixes, or cleaner runtime isolation before they deserve stronger claims.</p>
+
+    <p>The useful framing is workload fit, not headline hardware labels. K3 has normal X100 cores, vendor-mediated A100/TCM paths, media blocks, a PowerVR GPU stack, and visible high-speed I/O potential. Those pieces do not all behave like ordinary Linux CPU cores, and they do not automatically accelerate arbitrary models.</p>
+
+    <h2>The short version</h2>
+    <ul>
+      <li>K3 is a much stronger RISC-V Linux development board than RV2.</li>
+      <li>Normal user sessions get eight X100 cores, not sixteen ordinary cores.</li>
+      <li>Vendor-prepared INT8 computer-vision models are the clearest AI win so far.</li>
+      <li>YOLO numbers should be reported as full pipeline timing, not just raw inference latency.</li>
+      <li>H.264/H.265 media acceleration is real, but normal-user device access still needs cleanup.</li>
+      <li>OpenCL/Vulkan support is real, but current compute evidence is narrow and kernel-shape-sensitive.</li>
+      <li>Small local LLMs run, but current evidence does not support calling K3 a general LLM board.</li>
+      <li>10GbE and PCIe/NVMe potential should not be treated as measured throughput yet.</li>
+    </ul>
+
+    <h2>Normal Linux work looks good</h2>
+    <p>The cleanest early result is ordinary development work on the X100 cores. A generated C++20 build with 64 translation units scaled well across the eight normal user-visible cores.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Build mode</th>
+            <th>Wall time</th>
+            <th>Read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>make -j1</code></td>
+            <td>160.042 s</td>
+            <td>Serial baseline.</td>
+          </tr>
+          <tr>
+            <td><code>make -j8</code></td>
+            <td>21.431 s</td>
+            <td>About 7.47x faster.</td>
+          </tr>
+          <tr>
+            <td>Monitored thermal sample</td>
+            <td>67.0 C hottest zone</td>
+            <td>No sampled X100 frequency drop in that run.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That makes K3 feel like a real local development board rather than just a target to cross-compile for. The RV2 can run useful lab tasks, but K3 is much easier to imagine using for builds, package work, and longer interactive sessions.</p>
+
+    <h2>The CPU/RVV story changed</h2>
+    <p>The matched RV2/Pi 400 primitive harness puts K3 in a much better place than RV2. K3 is broadly ahead of RV2 and has several wins against the old Pi 400 comparison, especially where explicit RVV and streaming memory matter.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Primitive</th>
+            <th>K3 result</th>
+            <th>Interpretation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Scalar u64 mix</td>
+            <td>1340.9 M ops/s</td>
+            <td>Much stronger scalar baseline than RV2.</td>
+          </tr>
+          <tr>
+            <td>64 MiB pointer chase</td>
+            <td>6.39 M steps/s</td>
+            <td>Roughly tied with the old Pi 400 result and much better than RV2.</td>
+          </tr>
+          <tr>
+            <td><code>memcpy</code></td>
+            <td>5.72 GB/s</td>
+            <td>Strong streaming-memory signal.</td>
+          </tr>
+          <tr>
+            <td>Explicit RVV int8 dot</td>
+            <td>7.61-9.84 GMAC/s</td>
+            <td>RVV is useful when directly targeted.</td>
+          </tr>
+          <tr>
+            <td>RVV 1x4 tile</td>
+            <td>up to 10.87 GMAC/s</td>
+            <td>Output reuse and tile shape matter.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The lesson from RV2 still applies: compiler auto-vectorization is not the whole story. Explicit RVV kernels and shape-aware tiling are where the board starts to look interesting.</p>
+
+    <h2>The clearest AI fit is INT8 vision</h2>
+    <p>The strongest accelerator result so far is not chat-model inference. It is vendor-prepared INT8 computer vision through the SpaceMIT ONNX Runtime path. Official INT8 CV models show large raw provider wins over CPU.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>CPU</th>
+            <th>SpaceMIT</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>ArcFace INT8</td>
+            <td>140.140 ms</td>
+            <td>1.882 ms</td>
+            <td>74.45x</td>
+          </tr>
+          <tr>
+            <td>MobileNetv2 INT8</td>
+            <td>77.422 ms</td>
+            <td>3.216 ms</td>
+            <td>24.08x</td>
+          </tr>
+          <tr>
+            <td>ResNet50 INT8</td>
+            <td>299.356 ms</td>
+            <td>5.149 ms</td>
+            <td>58.14x</td>
+          </tr>
+          <tr>
+            <td>YOLOv8n 192x320 INT8</td>
+            <td>59.717 ms</td>
+            <td>2.262 ms</td>
+            <td>26.40x</td>
+          </tr>
+          <tr>
+            <td>YOLOv8n 320x320 INT8</td>
+            <td>83.521 ms</td>
+            <td>2.911 ms</td>
+            <td>28.69x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is the best current positive AI claim: vendor-prepared INT8 CV models can be very fast through the SpaceMIT provider. It should not be generalized to arbitrary ONNX graphs. Some synthetic attention-like, reduction, elementwise, and small quantized graphs were weak or slower through the provider than CPU.</p>
+
+    <h2>YOLO pipeline timing matters</h2>
+    <p>The YOLO wrapper evidence is useful because it includes more than raw model execution. Python postprocessing and OpenCV read/decode costs are already large enough to affect application-level FPS.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>YOLO video probe</th>
+            <th>Mean total</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>192x320, no draw</td>
+            <td>19.898 ms/frame</td>
+            <td>Real-object H.264 clip with stable detections.</td>
+          </tr>
+          <tr>
+            <td>192x320, draw</td>
+            <td>22.350 ms/frame</td>
+            <td>Drawing adds visible cost.</td>
+          </tr>
+          <tr>
+            <td>320x320, no draw</td>
+            <td>23.936 ms/frame</td>
+            <td>Higher input size still viable.</td>
+          </tr>
+          <tr>
+            <td>320x320, draw</td>
+            <td>27.491 ms/frame</td>
+            <td>Pipeline cost, not raw accelerator latency.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That is still a promising edge-vision shape. The guardrail is that application timing should include decode/read, preprocessing, inference, NMS/postprocess, and drawing when drawing is part of the application.</p>
+
+    <h2>Media is real, but permissions are not boring yet</h2>
+    <p>FFmpeg/stcodec media acceleration is another strong lane. In the 30-second 1080p30 sweep, the hardware paths were comfortably faster than real time.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Media path</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>H.264 stcodec encode</td>
+            <td>about 5.39x real-time</td>
+          </tr>
+          <tr>
+            <td>HEVC stcodec encode</td>
+            <td>about 8.29x real-time</td>
+          </tr>
+          <tr>
+            <td>HEVC stcodec decode</td>
+            <td>about 10.1x real-time</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The catch is operational. Normal-user access to the needed video device path is not clean yet. Until that is fixed and rerun from a fresh normal session, this is a real media capability but not yet an ergonomic user story.</p>
+
+    <h2>A100 is not eight extra shell cores</h2>
+    <p>Linux exposes more CPU topology than a normal user process can simply use. The observed user session gets the X100 side. A100 is reached through vendor-aware runtime paths, not by running arbitrary shell work on CPUs 8-15.</p>
+
+    <p>The current practical model is:</p>
+
+    <pre><code>X100 Linux process
+  -> vendor-aware runtime
+  -> A100/TCM placement and DMA mappings
+  -> supported dense tensor primitive
+  -> result returned to the application</code></pre>
+
+    <p>That distinction matters. SpaceMIT ONNX Runtime can map the provider libraries and A100/TCM device paths for supported workloads. Direct ordinary X100-side TCM byte-loop reads were slow in the first probe. Treat A100/TCM as a vendor-runtime resource, not as a general scratchpad or extra pool of Linux cores.</p>
+
+    <h2>GPU/OpenCL is real, but narrow so far</h2>
+    <p>The PowerVR OpenCL and Vulkan stacks enumerate and run smoke tests. A controlled non-vendor OpenCL FP32 kernel validated correctly, and explicit local sizing improved one simple recurrence kernel to about 38 GFLOP/s by wall-clock timing.</p>
+
+    <p>That is enough to say the GPU runtime is real and worth experimenting with. It is not enough to say the GPU is broadly fast for compute. A simple hand-written OpenCL SGEMM topped out around 1.67 GFLOP/s at N=512, while NumPy/BLAS CPU reached about 3.06 GFLOP/s on the same size. Event profiling was not trustworthy in the controlled harnesses, so validated wall-clock timing is the standard for now.</p>
+
+    <h2>Local LLMs run, but the big claim is not ready</h2>
+    <p>The board can run small local GGUF models. Qwen3 0.6B Q4_0 ran at 22.574 prompt tok/s and 15.812 generate tok/s at 8 threads. LiquidAI LFM2.5 8B A1B Q4_0 also fit and ran locally at 9.637 prompt tok/s and 7.828 generate tok/s.</p>
+
+    <p>That is useful, but it is not the same as proving a broad LLM appliance. The clean small-model control that compared paths showed the generic X100 llama.cpp route beating the SpacemiT llama path on SmolLM2 135M Q4_K_M. Later thread-sweep results showed good scaling for the installed backend, but also showed why backend isolation matters: different frontends can end up loading the same installed backend libraries.</p>
+
+    <p>The IME2/low-bit tensor work is promising and deserves its own later write-up. Manual Q4_0 tensor paths have reached real Qwen tensor bytes through hidden SpacemiT placement and validated against references. The missing public claim is stock model-level placement: ordinary model runs should not be credited with IME2 acceleration until attribution proves those tensors actually use the hidden path.</p>
+
+    <h2>What should wait</h2>
+    <p>Several K3 tracks are interesting but not publishable as strong claims yet:</p>
+
+    <ul>
+      <li>10GbE: the capable interface is visible, but no-carrier in the current tests and no measured 10GbE peer throughput yet.</li>
+      <li>Wired routing/firewall throughput: current TCP smoke results used the reachable Wi-Fi route.</li>
+      <li>NVMe/PCIe storage: no NVMe endpoint was present in the current inventory.</li>
+      <li>Camera or stcodec-to-detector pipeline: media permissions need to be fixed before the clean normal-user path is proven.</li>
+      <li>Large GGUF/30B-class claims: need deliberate model selection, checksums, load-time/memory measurements, backend isolation, and attribution.</li>
+      <li>Broad GPU compute: needs tuned GEMM, convolution/image kernels, Vulkan compute controls, and repeated CPU comparisons.</li>
+    </ul>
+
+    <h2>Current recommendation</h2>
+    <p>If someone is evaluating the K3 today, I would steer them this way: use it as a capable RISC-V Linux development board first, use SpaceMIT ONNX Runtime for vendor-prepared INT8 computer vision, treat media acceleration as real but still needing permission cleanup, and treat A100/TCM as a runtime-mediated accelerator path.</p>
+
+    <p>I would not buy it primarily as a general LLM server from the evidence so far. It can run local models, and the hidden low-bit acceleration path is genuinely interesting, but the practical public advice is still conservative: measure the exact model, quantization, backend, dispatch path, and pipeline timing before believing the label on the box.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
