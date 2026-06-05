@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Off-the-Shelf Model Viability on K3 | RISC-V Agent Lab</title>
+  <meta name="description" content="A practical pass over public model artifacts tested on K3: Qwen, LFM, Gemma, sparse Llama, generic RVV, and SpacemiT llama.cpp paths.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 model notes</p>
+    <h1>Off-the-shelf model viability on K3</h1>
+    <p class="lede">The K3 can run public language-model artifacts, and some of them are genuinely useful development targets. The practical lesson so far is not "download any 4-bit model and expect the accelerator to save it." It is that model architecture, quant layout, backend path, prompt-vs-decode shape, and runtime stability decide whether a public artifact is worth your time.</p>
+
+    <h2>The short version</h2>
+    <p>If I had to pick from the public artifacts tested so far, I would rank them this way:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Artifact class</th>
+            <th>Current read</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemma 4 26B A4B <code>UD-Q4_K_M</code></td>
+            <td>Best current development target</td>
+            <td>Fits better than Q8_0, strong SpacemiT prefill, bounded prompt sanity, reusable harness.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B Q8_0</td>
+            <td>Useful reference path</td>
+            <td>Works and validates the supported-format rule, but is memory-tight and slower than <code>UD-Q4_K_M</code>.</td>
+          </tr>
+          <tr>
+            <td>Qwen3 0.6B Q4_0</td>
+            <td>Good small control</td>
+            <td>Easy to run; upstream SpacemiT strongly improves prompt processing, but it is not a serious large-model proof.</td>
+          </tr>
+          <tr>
+            <td>LFM2.5 8B A1B Q4_0</td>
+            <td>Interesting architecture/runtime fit</td>
+            <td>Fast because attention is sparse across layers and the packed Q4_0 MoE path fits the helper.</td>
+          </tr>
+          <tr>
+            <td>Qwen3.6 35B A3B <code>UD-Q4_K_M</code></td>
+            <td>Promising boundary target</td>
+            <td>Loads and shows SpacemiT gains, but benchmark stability and output-quality evidence are not ready.</td>
+          </tr>
+          <tr>
+            <td>RedHatAI Sparse Llama W4A16/2:4</td>
+            <td>Research input, not a chat artifact yet</td>
+            <td>Real sparse weights map to K3 masks and raw tiles, but full inference is not implemented.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B <code>UD-IQ4_XS</code></td>
+            <td>Poor first target</td>
+            <td>Hot expert tensors use IQ formats the current SpacemiT path does not accelerate.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The selection rule</h2>
+    <p>The most reusable rule is simple: inspect expert tensor quantization before downloading or benchmarking huge files.</p>
+
+    <p>For the current upstream SpacemiT llama.cpp path, useful public GGUF candidates are the ones whose hot expert tensors land in formats the backend can actually accelerate. The current evidence favors <code>Q4_0</code>, <code>Q4_K</code>, <code>Q5_1</code>, <code>Q5_K</code>, and <code>Q8_0</code> in the right shapes. It does not favor <code>Q5_0</code> as a first target, and it does not favor IQ-heavy expert layouts such as the first Gemma <code>UD-IQ4_XS</code> pass.</p>
+
+    <p>That is why the best-looking artifact was not the smallest one by name. Gemma <code>UD-Q4_K_M</code> uses <code>Q4_K</code> gate/up expert tensors and <code>Q5_1</code> down expert tensors. Gemma <code>UD-Q4_K_S</code> uses <code>Q5_0</code> down tensors, which looked bad in the primitive probe. Gemma <code>UD-IQ4_XS</code> uses IQ expert tensors that did not map to the accelerated path.</p>
+
+    <h2>Small models are controls, not the answer</h2>
+    <p>The first local inventory only had tiny and small artifacts. That was enough to test whether the board could run llama.cpp paths, but not enough to characterize K3 as an LLM board.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Quant</th>
+            <th>Prompt rate</th>
+            <th>Generate rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>SmolLM2 135M</td>
+            <td>Q4_K_M</td>
+            <td>88.457 tok/s</td>
+            <td>54.975 tok/s</td>
+          </tr>
+          <tr>
+            <td>Qwen3 0.6B</td>
+            <td>Q4_0</td>
+            <td>22.574 tok/s</td>
+            <td>15.812 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Those are useful bounded checks, but they are not evidence for 30B-class viability. The 0.6B Qwen run proved that a public Qwen GGUF could be downloaded, checksummed, loaded, and benchmarked. It did not prove the datasheet's 30B claim, stock IME2 dispatch, FP4 sparse runtime support, or TCM-resident model tensors.</p>
+
+    <h2>Qwen3 Q4_0 showed the upstream path</h2>
+    <p>A current upstream llama.cpp SpacemiT build made Qwen3 Q4_0 more interesting. Compared against a matched upstream generic RVV build from the same source tree, SpacemiT strongly improved prompt processing but barely moved single-token generation.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen3 0.6B Q4_0</th>
+            <th>SpacemiT</th>
+            <th>Generic RVV</th>
+            <th>Ratio</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>330 tok/s</td>
+            <td>98 tok/s</td>
+            <td>about 3.35x</td>
+          </tr>
+          <tr>
+            <td><code>pp512</code></td>
+            <td>250-253 tok/s</td>
+            <td>90 tok/s</td>
+            <td>about 2.79x</td>
+          </tr>
+          <tr>
+            <td><code>tg128</code></td>
+            <td>33.2 tok/s</td>
+            <td>32.0 tok/s</td>
+            <td>about 1.04x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That pattern repeats across the investigation: K3 has a much easier time accelerating batched prompt work than batch-one decode. Once Q4_0 projection work moves off the hot path, attention and other residual work become visible.</p>
+
+    <h2>LFM2.5 was a model-shape lesson</h2>
+    <p>LFM2.5 8B A1B Q4_0 ran locally at 9.637 prompt tok/s and 7.828 generate tok/s in the early installed-backend run. Later runtime inspection showed why it was worth studying: its architecture is friendlier to this board than a plain every-layer-attention transformer.</p>
+
+    <ul>
+      <li>Only 6 of 24 layers are attention layers.</li>
+      <li>Most layers use shortconv/mixer blocks rather than full attention.</li>
+      <li>The public Q4_0 GGUF expert tensors can use the SpacemiT <code>MUL_MAT_ID</code> helper in the patched upstream path.</li>
+    </ul>
+
+    <p>With the opt-in expert path, LFM prompt processing moved from about 38.9 tok/s to about 82.2 tok/s. Decode barely changed until the Q6_K tied token embedding/output projection was converted to Q4_0, which moved decode from about 15.3 tok/s to about 18.0 tok/s.</p>
+
+    <p>The useful conclusion is not "LFM is magically fast." It is that model architecture and packed expert-op layout matter. A synthetic sparse-projection skeleton that treats active experts as separate calls does not match the real llama.cpp MoE dataflow.</p>
+
+    <h2>Gemma 4 26B A4B became the practical target</h2>
+    <p>Gemma 4 26B A4B was the first model family where the investigation turned into a practical public-artifact selection workflow.</p>
+
+    <p>The first target, <code>UD-IQ4_XS</code>, was the wrong fit. It loaded and ran through generic RVV, but its hot expert tensors were mostly <code>IQ4_NL</code> and <code>IQ3_S</code>. The current SpacemiT backend did not accelerate those expert formats, so the SpacemiT path was much slower than generic RVV on small prefill.</p>
+
+    <p>Header inspection then pointed to two better choices:</p>
+
+    <ul>
+      <li>Q8_0: all hot expert tensors in a supported format, but a 25 GiB model footprint and high memory pressure.</li>
+      <li><code>UD-Q4_K_M</code>: Q4_K gate/up experts and Q5_1 down experts, much smaller than Q8_0, and aligned with the primitive evidence.</li>
+    </ul>
+
+    <h2>Gemma Q8_0 worked, but was not the winner</h2>
+    <p>The Q8_0 Gemma artifact confirmed the selection rule. It was faster through SpacemiT than generic RVV in the checked envelope, but it was memory-tight on the 31 GiB board.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Gemma Q8_0</th>
+            <th>Generic RVV</th>
+            <th>SpacemiT</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>10.40 tok/s</td>
+            <td>17.67 tok/s</td>
+            <td>1.70x</td>
+          </tr>
+          <tr>
+            <td><code>tg16</code></td>
+            <td>4.10 tok/s</td>
+            <td>5.52 tok/s</td>
+            <td>1.35x</td>
+          </tr>
+          <tr>
+            <td>chat sanity</td>
+            <td>9.5 prompt / 3.8 gen</td>
+            <td>15.3 prompt / 4.5 gen</td>
+            <td>clean short run</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Q8_0 remains a useful reference path. It is not the best first development target because it is large, leaves less headroom, and loses to <code>UD-Q4_K_M</code> on the fixed prompt set.</p>
+
+    <h2>Gemma UD-Q4_K_M is the current best candidate</h2>
+    <p><code>UD-Q4_K_M</code> is the strongest off-the-shelf model candidate checked so far. It is smaller than Q8_0, uses the right expert quant layout for current SpacemiT support, and has both throughput and bounded prompt-sanity evidence.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Gemma <code>UD-Q4_K_M</code></th>
+            <th>Generic RVV</th>
+            <th>SpacemiT</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>10.11 tok/s</td>
+            <td>39.87 tok/s</td>
+            <td>3.94x</td>
+          </tr>
+          <tr>
+            <td><code>tg16</code></td>
+            <td>4.38 tok/s</td>
+            <td>6.00 tok/s</td>
+            <td>1.37x</td>
+          </tr>
+          <tr>
+            <td>fixed prompt average</td>
+            <td>9.80 prompt / 3.80 gen</td>
+            <td>36.78 prompt / 4.56 gen</td>
+            <td>3.6-4.0x prompt, about 1.2x gen</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The fixed prompt harness is important. It does not prove broad model quality, but it is more useful than only reporting <code>llama-bench</code>. Five practical prompts completed through SpacemiT with rc 0 and released TCM afterward. Q8_0 completed the same prompts too, but averaged 17.18 prompt tok/s and 4.12 generation tok/s versus <code>UD-Q4_K_M</code>'s 36.78 and 4.56.</p>
+
+    <p>A small rubric did not find a bounded quality reason to prefer Q8_0 over <code>UD-Q4_K_M</code>. Both passed the target-selection prompt when given the measured board facts, and both were otherwise limited by answer caps or imprecise wording. That leaves <code>UD-Q4_K_M</code> as the better current development target on performance, memory, and layout grounds.</p>
+
+    <h2>Qwen3.6 35B A3B is promising but not ready</h2>
+    <p>Qwen3.6 35B A3B <code>UD-Q4_K_M</code> is a viable development target, not a recommendation. It loads in current upstream llama.cpp, fits the board better than Q8_0 would, and shows useful SpacemiT acceleration in one-row benchmark runs.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen3.6 35B A3B</th>
+            <th>Generic RVV</th>
+            <th>SpacemiT</th>
+            <th>Ratio</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp64</code></td>
+            <td>6.48 tok/s</td>
+            <td>22.92 tok/s</td>
+            <td>3.54x</td>
+          </tr>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>9.17 tok/s</td>
+            <td>28.08 tok/s</td>
+            <td>3.06x</td>
+          </tr>
+          <tr>
+            <td><code>tg16</code></td>
+            <td>3.61 tok/s</td>
+            <td>5.78 tok/s</td>
+            <td>1.60x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The boundary matters: combined benchmark processes can abort, simple smoke prompts behaved poorly in the checked build, multimodal behavior was not tested, and low-level Q5_K/Q6_K correctness remains separate backend research. This is a strong lead for future work, not something I would hand to a user as the current practical choice.</p>
+
+    <h2>Sparse Llama is not off-the-shelf yet</h2>
+    <p>The RedHatAI Sparse Llama 3.1 8B W4A16/2:4 artifact is useful for research because it is shaped toward the K3's sparse-native peak path. Its Marlin metadata decodes cleanly, and a real layer-0 sparse tile can be mapped to SpacemiT recovery masks and matched against the raw <code>vmadot.sp i4</code> instruction.</p>
+
+    <p>That is excellent kernel/projection evidence. It is not full W4A16 sparse Llama inference. There is no token throughput claim, stock placement, TCM residency proof, runtime activation quantization path, attention/KV scheduling, or model-quality proof yet.</p>
+
+    <h2>What this says about buying or using K3</h2>
+    <p>The board is now past "can it run a model?" The better question is "which public model artifacts align with the runtime that exists today?"</p>
+
+    <p>Current answer:</p>
+
+    <ul>
+      <li>Use small Qwen/SmolLM-style artifacts as controls and smoke tests.</li>
+      <li>Use Gemma 4 26B A4B <code>UD-Q4_K_M</code> as the current serious development target.</li>
+      <li>Use Q8_0 as a reference when memory pressure is acceptable.</li>
+      <li>Use Qwen3.6 35B A3B <code>UD-Q4_K_M</code> as a research target, not a user recommendation.</li>
+      <li>Use sparse-native Llama artifacts to build the next runtime, not as current chat artifacts.</li>
+      <li>Avoid IQ-heavy or Q5_0-heavy expert layouts as first targets unless the goal is backend research.</li>
+    </ul>
+
+    <h2>The publication boundary</h2>
+    <p>I would not publish any of these as a default public model artifact yet. The practical recommendation is narrower: <code>UD-Q4_K_M</code> is the best current development target we have tested, and the workflow around it is reusable.</p>
+
+    <p>A stronger recommendation needs longer task-specific quality checks, more context-length coverage, clean one-row benchmark discipline, TCM cleanup checks, and preserved generic-RVV versus SpacemiT comparisons. The useful progress is that we now know what to inspect before wasting time: expert quant layout, prompt/decode split, backend attribution, and whether the model's architecture creates enough batched work for the K3 path to matter.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
