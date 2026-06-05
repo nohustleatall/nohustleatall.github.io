@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The K3's 60 TOPS Claim and LLM Reality | RISC-V Agent Lab</title>
+  <meta name="description" content="A measured look at K3 raw IME sparse-int4 peak throughput, why the 60 TOPS class is plausible, and why that is not the same as local LLM token throughput.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 field notes</p>
+    <h1>The K3's 60 TOPS claim is plausible. That still does not make it a 60 TOPS LLM box.</h1>
+    <p class="lede">The K3 datasheet's AI headline is no longer just a mysterious marketing number. A raw sparse-int4 IME probe on the A100 side gets close enough to explain the class of the claim. The catch is that raw sparse-effective instruction throughput is very different from full local LLM token throughput.</p>
+
+    <h2>The useful distinction</h2>
+    <p>There are at least three different performance questions hiding behind one headline number:</p>
+
+    <ul>
+      <li>Can the silicon execute native sparse int4 matrix instructions at a tens-of-TOPS class peak?</li>
+      <li>Can a runtime feed those instructions with the right sparse weights, masks, activations, and tile shapes?</li>
+      <li>Can a real language model generate useful tokens at a target speed and quality level?</li>
+    </ul>
+
+    <p>The first answer now looks like yes. The second answer is workload- and runtime-dependent. The third answer still needs model-level proof for each model family, quantization, context length, backend, and dispatch path.</p>
+
+    <h2>What was measured</h2>
+    <p>The raw IME peak probe did not use GGUF, ONNX, llama.cpp, a model graph, or a quality test. It used direct inline assembly for public IME dot-product instructions and counted the work represented by the native tile shapes.</p>
+
+    <p>The toolchain needed the vendor extension enabled:</p>
+
+    <pre><code>gcc -O3 -march=rv64gcv_xsmtvdotii -mabi=lp64d</code></pre>
+
+    <p>That detail matters. Without the extension, the assembler rejects the instruction. Ordinary shell work on the K3 runs on the X100 side, CPUs 0-7. The raw IME instructions ran only when launched in a systemd scope restricted to CPUs 8-15, matching the earlier evidence that A100-side work is not just ordinary userland CPU work.</p>
+
+    <pre><code>systemd-run --scope -p AllowedCPUs=8-15 ...</code></pre>
+
+    <h2>The raw peak result</h2>
+    <p>With eight worker processes on the A100-side CPU set, the sparse int4 case measured about 47.16 sparse-effective TOPS.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Case</th>
+            <th>Workers</th>
+            <th>Dense TOPS</th>
+            <th>Sparse-effective TOPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>dense i8</td>
+            <td>8</td>
+            <td>13.10</td>
+            <td>13.10</td>
+          </tr>
+          <tr>
+            <td>dense i4</td>
+            <td>8</td>
+            <td>26.10</td>
+            <td>26.10</td>
+          </tr>
+          <tr>
+            <td>sparse i8</td>
+            <td>8</td>
+            <td>11.75</td>
+            <td>23.51</td>
+          </tr>
+          <tr>
+            <td>sparse i4</td>
+            <td>8</td>
+            <td>23.58</td>
+            <td>47.16</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The sparse-effective number is the relevant one for the headline class because 4:2 structured sparsity counts the skipped positions as represented dense work. That is normal for sparse accelerator marketing, but it has to be stated plainly.</p>
+
+    <p>The A100-side cores were observed around 1.8 GHz in this session, while the CPU table reports a 2.0 GHz max for CPUs 8-15. Scaling 47.16 TOPS by 2.0 / 1.8 gives about 52.4 sparse-effective TOPS. The rest of the distance to a 60 TOPS class peak is credible for a datasheet number: ideal scheduling, peak clock, unrolled vendor kernels, less loop overhead, and a cleaner instruction mix than a small userspace probe.</p>
+
+    <h2>What the number does not mean</h2>
+    <p>It does not mean a GGUF model sees 47 TOPS. It does not mean llama.cpp is using the path. It does not mean a 30B model has been locally reproduced above 10 tokens per second. It does not mean TCM residency has been proven for model tensors. It does not mean FP4 sparse model-tensor runtime support has been proven.</p>
+
+    <p>The measured raw path is narrow:</p>
+
+    <ul>
+      <li>direct IME instructions;</li>
+      <li>A100-side CPU placement;</li>
+      <li>native sparse int4 tile shape;</li>
+      <li>no model loader;</li>
+      <li>no runtime repack cost;</li>
+      <li>no attention, routing, logits, or sampling;</li>
+      <li>no accuracy or output-quality claim.</li>
+    </ul>
+
+    <h2>Why model throughput is lower</h2>
+    <p>Language-model runtime is not one ideal sparse dot-product loop. Even if a projection kernel is fast, the full token path includes model loading, tensor placement, quantization format conversion, repacking, activation handling, scheduling, attention and KV-cache work, residual paths, logits, and sampling.</p>
+
+    <p>The roofline estimate makes the decode problem concrete. Single-token decode is the danger zone because it combines low arithmetic intensity with underfilled native tiles.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen-like down projection</th>
+            <th>Cols</th>
+            <th>GOPS</th>
+            <th>Ops/byte estimate</th>
+            <th>Lower-bound GB/s</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>q4_0</td>
+            <td>1</td>
+            <td>69.4</td>
+            <td>3.50</td>
+            <td>20.0</td>
+          </tr>
+          <tr>
+            <td>q4_0</td>
+            <td>8</td>
+            <td>360.8</td>
+            <td>24.98</td>
+            <td>14.6</td>
+          </tr>
+          <tr>
+            <td>q4_0</td>
+            <td>64</td>
+            <td>764.0</td>
+            <td>107.79</td>
+            <td>7.1</td>
+          </tr>
+          <tr>
+            <td>q4_K</td>
+            <td>1</td>
+            <td>63.3</td>
+            <td>3.31</td>
+            <td>19.2</td>
+          </tr>
+          <tr>
+            <td>q4_K</td>
+            <td>64</td>
+            <td>508.7</td>
+            <td>105.03</td>
+            <td>4.8</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>At one output column, the runtime streams a lot of weight data for very little reuse. At eight or more columns, the native tile starts to fill better. At 32 or 64 columns, the same weights are reused across many output columns, so arithmetic intensity improves sharply. That is why batched prefill and batched decode can look much better than single-stream token generation.</p>
+
+    <h2>The model-shape lesson</h2>
+    <p>The peak path wants a model and runtime shaped around it:</p>
+
+    <ul>
+      <li>4:2 structured sparse weights;</li>
+      <li>native int4 layout compatible with <code>vmadot.sp</code>;</li>
+      <li>recovery-mask and value streams packed the way the instruction expects;</li>
+      <li>batched work that fills the native N=8 tile;</li>
+      <li>minimal hot-path repacking;</li>
+      <li>attention that does not dominate decode.</li>
+    </ul>
+
+    <p>Generic Q4_K or Q4_0 GGUF files are not automatically that. They may still run, and some current upstream SpacemiT paths are useful, but the raw sparse peak path is a different target from coercing ordinary GGUF tensors into a vendor backend.</p>
+
+    <h2>Sparse model evidence is promising, but scoped</h2>
+    <p>The sparse Llama work shows that real 2:4 sparse model weights can be decoded into something K3's sparse-native path can understand. A RedHatAI Sparse Llama 3.1 8B artifact uses 2:4 sparsity and int4 weight quantization. Its Marlin metadata decodes cleanly, and the recovered 2:4 symbols map to SpacemiT recovery masks.</p>
+
+    <p>The important narrow result: a real layer-0 <code>self_attn.k_proj</code> sparse weight tile was converted into the expected sparse values and masks, and the raw <code>vmadot.sp i4</code> tile matched the scalar reference after the mask-packing convention was fixed. That is kernel/projection evidence. It is not full sparse Llama inference, not token throughput, not stock placement, not TCM residency, and not model-quality proof.</p>
+
+    <h2>Runtime is the product</h2>
+    <p>The later decode-skeleton work shows why a fast projection primitive is not enough. At short context, projection scheduling overhead matters. At medium and long context, attention score/value work can dominate.</p>
+
+    <p>Persistent projection workers cut a large part of the integration cost:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Shape</th>
+            <th>Fresh workers</th>
+            <th>Persistent workers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>h2048, seven projections</td>
+            <td>about 6.7-6.9 ms/layer</td>
+            <td>3.221 ms/layer</td>
+          </tr>
+          <tr>
+            <td>h2560, seven projections</td>
+            <td>about 7.3-7.6 ms/layer</td>
+            <td>4.756 ms/layer</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Attention is the other big lever. Full-context attention grows linearly with context. Local/windowed attention changes the budget class.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Shape</th>
+            <th>Attention mode</th>
+            <th>Estimated tok/s</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>h2048, 24 layers</td>
+            <td>full 4k</td>
+            <td>1.38</td>
+          </tr>
+          <tr>
+            <td>h2048, 24 layers</td>
+            <td>window 512</td>
+            <td>6.06</td>
+          </tr>
+          <tr>
+            <td>h2560, 24 layers</td>
+            <td>full 4k</td>
+            <td>1.09</td>
+          </tr>
+          <tr>
+            <td>h2560, 24 layers</td>
+            <td>window 512</td>
+            <td>4.52</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Those are measured-component estimates, not a trained model run. They are still useful because they show the shape of a viable K3-native runtime: persistent projection workers, local/windowed attention, vectorized attention kernels, optional sink tokens, and careful fusion of q/k/v and gate/up work.</p>
+
+    <h2>What to believe today</h2>
+    <p>The conservative read is:</p>
+
+    <ul>
+      <li>The K3's sparse-int4 peak claim is plausible as a sparse-effective raw instruction peak.</li>
+      <li>A100-side IME instructions are real and require the A100-side CPU set.</li>
+      <li>Raw peak measurements do not transfer directly to GGUF, llama.cpp, or chat throughput.</li>
+      <li>Single-token decode is memory/repack and tile-utilization limited.</li>
+      <li>Batched work, native sparse formats, and local/hybrid attention are the path toward useful LLM runtime performance.</li>
+      <li>No local 30B/A3B vendor-performance claim should be made without artifact, checksum, runtime, dispatch, attribution, context, and token-count evidence.</li>
+    </ul>
+
+    <h2>What I would test next</h2>
+    <p>The next useful experiment is not another broad benchmark. It is a small runtime skeleton that combines the pieces already measured separately:</p>
+
+    <ul>
+      <li>persistent projection worker pool;</li>
+      <li>real sparse projection calls;</li>
+      <li>fused q/k/v and gate/up scheduling where possible;</li>
+      <li>attention window argument;</li>
+      <li>sink-token option;</li>
+      <li>stage timing for norm, projections, attention, and logits;</li>
+      <li>full-context attention as a correctness/control path.</li>
+    </ul>
+
+    <p>The target is not to prove every marketing claim at once. It is to find the smallest honest K3-native model shape where the sparse-int4 hardware, runtime scheduling, and attention design all point in the same direction.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
