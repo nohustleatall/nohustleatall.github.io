@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gemma 4 on K3: Dense, MoE, and MTP | RISC-V Agent Lab</title>
+  <meta name="description" content="Gemma 4 investigation notes on K3: why 12B dense is a weak speed fit, why 26B A4B MoE depends on expert quant layout, and why MTP is promising but not yet a K3 speed result.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 model notes</p>
+    <h1>Gemma 4 on K3: dense, MoE, and MTP are three different stories</h1>
+    <p class="lede">Gemma 4 has been useful in the K3 investigation because it forces three separate questions apart. A dense 12B model tests the plain modern-transformer speed tax. The 26B A4B MoE tests whether expert tensor layout matches the SpacemiT path. MTP tests whether speculative decoding could help, but it is currently a runtime-integration problem rather than a measured K3 speedup.</p>
+
+    <h2>The short version</h2>
+    <p>The best Gemma result so far is not the dense 12B model and not the largest Q8_0 artifact. It is Gemma 4 26B A4B <code>UD-Q4_K_M</code>, because its hot expert tensors line up with formats the current SpacemiT llama.cpp path can accelerate.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Gemma path</th>
+            <th>Current K3 read</th>
+            <th>Why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemma 4 12B IT Q4_0</td>
+            <td>Useful dense baseline, poor speed fit</td>
+            <td>About 24.70 tok/s prompt and 3.38 tok/s decode in the checked bench path.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B <code>UD-IQ4_XS</code></td>
+            <td>Wrong first MoE target</td>
+            <td>Hot experts are mostly IQ formats that do not map to the current SpacemiT expert path.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B Q8_0</td>
+            <td>Good reference, memory-tight</td>
+            <td>Real SpacemiT win, but close to the 31 GiB board's practical memory edge.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B <code>UD-Q4_K_M</code></td>
+            <td>Best current Gemma development target</td>
+            <td>Q4_K gate/up plus Q5_1 down experts give strong prefill acceleration and manageable size.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 MTP assistant</td>
+            <td>Feasible research path, not a speed result yet</td>
+            <td>The official assistant works in Transformers, but native llama.cpp needs Gemma-specific state sharing.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Dense 12B is the reality check</h2>
+    <p>Gemma 4 12B IT Q4_0 is valuable because it answers a boring but important question: what happens when a current dense Gemma model is run through the checked K3 SpacemiT llama.cpp path?</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Size</th>
+            <th>Params</th>
+            <th><code>pp128</code></th>
+            <th><code>tg32</code></th>
+            <th><code>tg128</code></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemma 4 12B IT Q4_0</td>
+            <td>6.26 GiB</td>
+            <td>11.91B</td>
+            <td>24.70 tok/s</td>
+            <td>3.38 tok/s</td>
+            <td>3.38 tok/s</td>
+          </tr>
+          <tr>
+            <td>LFM2 24B A2B Q4_0</td>
+            <td>12.54 GiB</td>
+            <td>23.84B</td>
+            <td>71.37 tok/s</td>
+            <td>16.70 tok/s</td>
+            <td>16.83 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That comparison is the point. LFM2 has roughly twice the total parameters of the dense Gemma 12B artifact, but it decodes much faster on the checked K3 path. Parameter count is not the speed predictor here. Active compute, attention frequency, tensor layout, and the packed expert runtime path matter more.</p>
+
+    <p>Gemma 4 12B may still be useful if the model quality is what you need and the speed is acceptable. It is not the shape that teaches the board's best-case acceleration story.</p>
+
+    <h2>The first 26B MoE target was the wrong quant</h2>
+    <p>Gemma 4 26B A4B is more interesting architecturally, but MoE alone is not enough. The first small-ish public target, <code>UD-IQ4_XS</code>, loaded in current upstream llama.cpp and ran through generic RVV, but its hot expert tensors were a poor match for the SpacemiT backend.</p>
+
+    <p>The checked layout had 30 layers, hidden size 2816, 128 experts, and 8 active experts. The important part was the tensor format:</p>
+
+    <ul>
+      <li>layers 0 through 28 expert down tensors: <code>IQ4_NL</code>;</li>
+      <li>layers 0 through 28 expert gate/up tensors: <code>IQ3_S</code>;</li>
+      <li>the final layer differed, but most hot expert work was still IQ-heavy.</li>
+    </ul>
+
+    <p>Generic RVV was the usable baseline for that artifact: about 9.31 tok/s at <code>pp128</code> and 4.37 tok/s at <code>tg16</code>. The SpacemiT path could complete small prefill rows after clearing stale TCM blocks, but it was around 1.1 tok/s for <code>pp8</code> through <code>pp32</code>. That is a useful negative result: placing the wrong quant layout on the vendor path can make things worse.</p>
+
+    <h2>The primitive probe gave a selection rule</h2>
+    <p>The next step was not "download every Gemma quant." It was to test which expert-like tensor formats actually get useful acceleration.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Format</th>
+            <th>Gate/up-like result</th>
+            <th>Decode-like result</th>
+            <th>Practical read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Q4_0</code></td>
+            <td>large speedup</td>
+            <td>large speedup</td>
+            <td>Best clean path, but not always the available useful artifact.</td>
+          </tr>
+          <tr>
+            <td><code>Q4_K</code></td>
+            <td>51.43x</td>
+            <td>17.73x</td>
+            <td>Good gate/up candidate.</td>
+          </tr>
+          <tr>
+            <td><code>Q5_1</code></td>
+            <td>48.79x</td>
+            <td>16.23x</td>
+            <td>Good down-projection candidate.</td>
+          </tr>
+          <tr>
+            <td><code>Q5_K</code></td>
+            <td>76.41x</td>
+            <td>31.05x</td>
+            <td>Promising where present.</td>
+          </tr>
+          <tr>
+            <td><code>Q5_0</code></td>
+            <td>about 1.00x</td>
+            <td>about 1.00x</td>
+            <td>Avoid as a first target despite nominal support.</td>
+          </tr>
+          <tr>
+            <td><code>IQ4_NL</code> / <code>IQ3_S</code></td>
+            <td>no useful SpacemiT support in the checked path</td>
+            <td>no useful SpacemiT support in the checked path</td>
+            <td>Good RVV baseline or backend research target, not the first accelerated Gemma target.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That produced the durable triage rule: inspect expert tensor layout before investing board time. For Gemma 4 26B A4B, <code>UD-Q4_K_M</code> became more attractive than <code>UD-Q4_K_S</code> because the former uses <code>Q5_1</code> expert down tensors while the latter uses <code>Q5_0</code> down tensors.</p>
+
+    <h2>Q8_0 proved the MoE path can work</h2>
+    <p>The Q8_0 artifact was a useful reference because all hot expert tensors were in a supported format. It was also large: llama.cpp reported about 25.00 GiB, and the first RVV load probe reached roughly 31.5 GB RSS on the checked 31 GiB board.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Gemma 26B A4B Q8_0</th>
+            <th>Generic RVV</th>
+            <th>SpacemiT</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>10.40 tok/s</td>
+            <td>17.67 tok/s</td>
+            <td>1.70x</td>
+          </tr>
+          <tr>
+            <td><code>tg16</code></td>
+            <td>4.10 tok/s</td>
+            <td>5.52 tok/s</td>
+            <td>1.35x</td>
+          </tr>
+          <tr>
+            <td>chat sanity</td>
+            <td>9.5 prompt / 3.8 gen</td>
+            <td>15.3 prompt / 4.5 gen</td>
+            <td>clean short run</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The Q8_0 result matters because it confirms the selection rule at model level. When Gemma's hot expert tensors use a format the backend accelerates, SpacemiT can win. The downside is memory pressure, not lack of acceleration.</p>
+
+    <h2>UD-Q4_K_M is the practical Gemma target</h2>
+    <p><code>UD-Q4_K_M</code> was the better tradeoff. It is much smaller than Q8_0, keeps the hot expert tensors in useful formats, and produced the strongest Gemma result so far.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Gemma 26B A4B <code>UD-Q4_K_M</code></th>
+            <th>Generic RVV</th>
+            <th>SpacemiT</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp64</code></td>
+            <td>10.14 tok/s</td>
+            <td>39.27 tok/s</td>
+            <td>3.87x</td>
+          </tr>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>10.11 tok/s</td>
+            <td>39.87 tok/s</td>
+            <td>3.94x</td>
+          </tr>
+          <tr>
+            <td><code>tg16</code></td>
+            <td>4.38 tok/s</td>
+            <td>6.00 tok/s</td>
+            <td>1.37x</td>
+          </tr>
+          <tr>
+            <td>fixed prompt average</td>
+            <td>9.80 prompt / 3.80 gen</td>
+            <td>36.78 prompt / 4.56 gen</td>
+            <td>about 3.75x prompt, 1.20x gen</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The perf profile matched the tensor-layout story. The SpacemiT prefill run sampled MoE kernels for i8/i4 and i8/i5 work, consistent with Q4_K gate/up and Q5_1 down experts. Repack still appears in process-level profiles because tensors are converted when loaded into the SpacemiT buffer, but the repeated prefill profile showed steady-state IME work rather than a pure repack artifact.</p>
+
+    <p>The operating boundary is also clearer now. Eight threads are the current safe setting for this path. Sixteen threads aborted because thread IDs exceeded the backend's preferred-core list. Combined multi-row <code>llama-bench</code> sweeps hit allocator failures, so the reliable harness runs one row per process and checks TCM release afterward.</p>
+
+    <h2>Quality evidence is bounded</h2>
+    <p>The fixed-prompt harness is not a broad model-quality benchmark. It is still better than a single "hello world" generation. It ran target selection, quant-layout explanation, parser, risk-register, and runbook prompts, saving timing and completion metadata for each row.</p>
+
+    <p>On the identical five-prompt set, <code>UD-Q4_K_M</code> averaged 36.78 prompt tok/s and 4.56 generation tok/s through SpacemiT. Q8_0 averaged 17.18 prompt tok/s and 4.12 generation tok/s. The small rubric did not identify a quality reason to prefer Q8_0 over <code>UD-Q4_K_M</code>; both passed target selection when given measured board facts and were otherwise mostly partial because of answer caps or imprecise wording.</p>
+
+    <p>That is enough to use <code>UD-Q4_K_M</code> as a development target. It is not enough to publish a general artifact recommendation or claim broad Gemma quality on K3.</p>
+
+    <h2>MTP is not just another GGUF</h2>
+    <p>Gemma 4's MTP assistant is interesting because it could attack the decode bottleneck directly. But it is not a simple matter of loading a second model file into the current runtime.</p>
+
+    <p>The official assistant path works in development Transformers with a matching Gemma 4 target. A tiny CPU assisted-generation run completed and produced the same first four generated tokens as the baseline, with the MTP path taking 29.519 seconds versus 36.158 seconds in that particular reference run. That proves the mechanism exists in the official software stack.</p>
+
+    <p>The assistant is a real drafter, not a normal standalone language model. For the 12B QAT assistant, the checked metadata showed:</p>
+
+    <ul>
+      <li>about 422.9M parameters in BF16;</li>
+      <li>4 assistant layers;</li>
+      <li>assistant hidden size 1024;</li>
+      <li>backbone hidden size 3840;</li>
+      <li>sliding/sliding/sliding/full attention layer pattern;</li>
+      <li>input projection over token embedding plus target hidden state.</li>
+    </ul>
+
+    <p>Direct token-ID inference fails by design: the assistant needs <code>inputs_embeds</code> and <code>shared_kv_states</code>. In Google's path, the target model returns hidden states and shared KV state, then the assistant proposes draft tokens, and the target verifies them in parallel.</p>
+
+    <h2>Why native llama.cpp MTP is a real project</h2>
+    <p>Current upstream llama.cpp has speculative/MTP machinery, but it is shaped around NextN-style draft heads. Gemma 4 is different. The assistant needs target token embedding, target last hidden state, and target full/SWA KV state. Existing hidden-row plumbing is not enough.</p>
+
+    <p>A local prototype made real progress:</p>
+
+    <ul>
+      <li>the upstream converter originally rejected <code>Gemma4UnifiedAssistantForCausalLM</code>;</li>
+      <li>a prototype converter emitted a <code>gemma4-assistant</code> GGUF;</li>
+      <li>the assistant GGUF had 49 tensors and was about 822 MiB in BF16;</li>
+      <li>target hidden-state extraction was prototyped;</li>
+      <li>target input-embedding extraction was prototyped;</li>
+      <li>assistant attention over target full/SWA KV was prototyped in local CPU smoke tests.</li>
+    </ul>
+
+    <p>The current blocker has moved from "unsupported architecture" to "match the recurrence exactly." One-token draft mode accepted 5 out of 5 draft tokens in the local constrained test. Two-token draft mode was stable but accepted 5 out of 10, exposing the next problem: the second and later draft steps must feed recurrence state exactly like Google's candidate generator.</p>
+
+    <h2>What to believe today</h2>
+    <p>The Gemma result is conditional but useful:</p>
+
+    <ul>
+      <li>Dense Gemma 4 12B is a good control, not a good K3 speed shape.</li>
+      <li>Gemma 4 26B A4B can be a good K3 development target, but only with the right expert tensor layout.</li>
+      <li><code>UD-IQ4_XS</code> is a negative boundary for current SpacemiT acceleration.</li>
+      <li>Q8_0 proves the accelerated path can work, but it is memory-tight.</li>
+      <li><code>UD-Q4_K_M</code> is the current practical Gemma target because Q4_K plus Q5_1 aligns with the measured backend behavior.</li>
+      <li>MTP is promising for decode, but no native K3 speedup has been proven yet.</li>
+    </ul>
+
+    <p>The next useful Gemma work is not another headline benchmark. It is a longer quality harness for <code>UD-Q4_K_M</code>, a clean low-level correctness pass for Q5-family expert paths, and a decision on whether Gemma 4 MTP acceptance behavior is strong enough to justify a native llama.cpp implementation on K3.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
