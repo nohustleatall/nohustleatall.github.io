@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gemma 4 on K3: Dense, MoE, and MTP | RISC-V Agent Lab</title>
-  <meta name="description" content="Gemma 4 investigation notes on K3: why 12B dense is a weak speed fit, why 26B A4B MoE depends on expert quant layout, and why MTP is promising but not yet a K3 speed result.">
+  <meta name="description" content="Gemma 4 investigation notes on K3: dense 12B, 26B A4B MoE quant layout, E2B/E4B QAT targets, and prototype MTP speedups.">
   <link rel="stylesheet" href="../style.css">
 </head>
 <body>
@@ -21,7 +21,7 @@
   <main class="post">
     <p class="eyebrow">K3 model notes</p>
     <h1>Gemma 4 on K3: dense, MoE, and MTP are three different stories</h1>
-    <p class="lede">Gemma 4 has been useful in the K3 investigation because it forces three separate questions apart. A dense 12B model tests the plain modern-transformer speed tax. The 26B A4B MoE tests whether expert tensor layout matches the SpacemiT path. MTP tests whether speculative decoding could help, but it is currently a runtime-integration problem rather than a measured K3 speedup.</p>
+    <p class="lede">Gemma 4 has been useful in the K3 investigation because it forces several separate questions apart. A dense 12B model tests the plain modern-transformer speed tax. The 26B A4B MoE tests whether expert tensor layout matches the SpacemiT path. The E2B/E4B QAT GGUFs test Google's smaller edge shapes. MTP tests whether speculative decoding can improve decode once the assistant is cheap enough and the runtime avoids unnecessary logits.</p>
 
     <h2>The short version</h2>
     <p>The best Gemma result so far is not the dense 12B model and not the largest Q8_0 artifact. It is Gemma 4 26B A4B <code>UD-Q4_K_M</code>, because its hot expert tensors line up with formats the current SpacemiT llama.cpp path can accelerate.</p>
@@ -58,8 +58,8 @@
           </tr>
           <tr>
             <td>Gemma 4 MTP assistant</td>
-            <td>Feasible research path, not a speed result yet</td>
-            <td>The official assistant works in Transformers, but native llama.cpp needs Gemma-specific state sharing.</td>
+            <td>Prototype speed win on E2B/E4B, not production-ready yet</td>
+            <td>KV mapping, Q4 assistant bodies, ordered tensors, and process-only updates now work in a short direct harness.</td>
           </tr>
         </tbody>
       </table>
@@ -104,6 +104,48 @@
     <p>That comparison is the point. LFM2 has roughly twice the total parameters of the dense Gemma 12B artifact, but it decodes much faster on the checked K3 path. Parameter count is not the speed predictor here. Active compute, attention frequency, tensor layout, and the packed expert runtime path matter more.</p>
 
     <p>Gemma 4 12B may still be useful if the model quality is what you need and the speed is acceptable. It is not the shape that teaches the board's best-case acceleration story.</p>
+
+    <h2>The smaller QAT targets are better speed shapes</h2>
+    <p>The later E2B and E4B QAT GGUF tests changed the Gemma story. These are text-only runnable GGUF targets, not the separate mobile compressed-tensors releases. They use smaller hidden sizes, low KV-head counts, sliding-window attention, and model shapes that look much more appropriate for K3 decode than the dense 12B baseline.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>QAT target</th>
+            <th>Params</th>
+            <th>Size</th>
+            <th>Shape</th>
+            <th>Target-only decode</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Gemma 4 E2B QAT Q4</td>
+            <td>4.63B</td>
+            <td>3.10 GiB</td>
+            <td>35 layers, hidden 1536, KV heads 1, window 512</td>
+            <td>about 10.9-12.0 tok/s</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 E4B QAT Q4</td>
+            <td>7.46B</td>
+            <td>4.79 GiB</td>
+            <td>42 layers, hidden 2560, KV heads 2, window 512</td>
+            <td>about 6.6-7.2 tok/s</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 12B Q4_0</td>
+            <td>11.91B</td>
+            <td>6.26 GiB</td>
+            <td>dense 12B-class text model</td>
+            <td>about 3.38 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That is an important correction to the simple dense-vs-MoE framing. Gemma 4's small QAT text models are not MoE like the 26B A4B target, but they still fit the K3 better than the 12B dense artifact because their attention and memory footprint are more edge-shaped.</p>
 
     <h2>The first 26B MoE target was the wrong quant</h2>
     <p>Gemma 4 26B A4B is more interesting architecturally, but MoE alone is not enough. The first small-ish public target, <code>UD-IQ4_XS</code>, loaded in current upstream llama.cpp and ran through generic RVV, but its hot expert tensors were a poor match for the SpacemiT backend.</p>
@@ -297,21 +339,83 @@
       <li>assistant attention over target full/SWA KV was prototyped in local CPU smoke tests.</li>
     </ul>
 
-    <p>The current blocker has moved from "unsupported architecture" to "match the recurrence exactly." One-token draft mode accepted 5 out of 5 draft tokens in the local constrained test. Two-token draft mode was stable but accepted 5 out of 10, exposing the next problem: the second and later draft steps must feed recurrence state exactly like Google's candidate generator.</p>
+    <p>The first 12B QAT prototype moved the blocker from "unsupported architecture" to "match the recurrence exactly." One-token draft mode accepted 5 out of 5 draft tokens in the local constrained test. Two-token draft mode was stable but accepted 5 out of 10, exposing that second and later draft steps need exact recurrence behavior.</p>
+
+    <h2>E2B and E4B make MTP concrete</h2>
+    <p>The newer E2B and E4B QAT MTP probes made the speculative-decoding story much sharper. The key runtime fix was durable target-KV mapping: assistant sliding-attention layers map to the target's last real sliding KV layer, and assistant full-attention layers map to the target's last real full KV layer. For the checked targets that means E2B maps to layers 13 and 14, E4B maps to 22 and 23, and 12B maps to 46 and 47.</p>
+
+    <p>After that mapping, E2B and E4B MTP run without the previous target-KV crash. The BF16 full-vocabulary assistant fallback is still too slow, but Q4 assistants start to help.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Target-only</th>
+            <th>Dense Q4 assistant MTP</th>
+            <th>Best prototype MTP</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>E2B QAT Q4</td>
+            <td>10.88 tok/s</td>
+            <td>10.61 tok/s, depth 2</td>
+            <td>13.54 tok/s with mixed sparse assistant</td>
+          </tr>
+          <tr>
+            <td>E4B QAT Q4</td>
+            <td>6.59 tok/s</td>
+            <td>8.04 tok/s, depth 2</td>
+            <td>9.32 tok/s with mixed sparse assistant</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Those are short direct-harness results, not a polished llama.cpp feature and not a production claim. They matter because they show MTP can produce an end-to-end speedup on K3-class Gemma QAT targets when the assistant body is cheap and the runtime avoids wasted vocabulary projections.</p>
+
+    <h2>The ordered sparse path is the real MTP trick</h2>
+    <p>The official E2B/E4B assistants are not meant to score the full 262144-token vocabulary every draft step. They use ordered embeddings: centroid vectors plus token ordering metadata. The runtime scores centroid buckets, expands the selected buckets into candidate token ids, and scores only that candidate subset.</p>
+
+    <p>The first converter dropped the ordered tensors, which forced a full-vocabulary fallback. A follow-up converter now preserves and loads them:</p>
+
+    <ul>
+      <li><code>assist.centroids.weight</code>, BF16, shape <code>[256, 2048]</code>;</li>
+      <li><code>assist.token_ordering.weight</code>, I32, shape <code>[262144]</code>.</li>
+    </ul>
+
+    <p>The sparse candidate correctness probe is encouraging. For E2B, the top 32 centroid buckets included the dense greedy token 29 out of 32 times, and top 64 included it 31 out of 32 times. For E4B, top 32 also hit 29 out of 32, top 64 hit 30 out of 32, and top 128 hit 32 out of 32. That confirms the bucket-contiguous token ordering interpretation and gives a concrete candidate-count tradeoff.</p>
+
+    <p>The current sparse implementation is still not the final fast path. CPU sparse scoring over 4096 candidates costs about 4.6 to 4.7 ms per assistant step, and larger candidate sets are correspondingly more expensive. Fully quantized sparse scoring also exposed a backend placement problem: dynamic <code>GET_ROWS</code> over a Q6_K output table in the SpacemiT buffer does not schedule cleanly, and forcing it to CPU produced unusable drafts. The useful workaround so far is a mixed assistant: Q4_0 transformer/projection body, BF16 output table, sparse scoring, and a process-only path that skips logits when the assistant only needs to update hidden state.</p>
+
+    <h2>The mobile QAT releases are design evidence</h2>
+    <p>The mobile QAT releases are not immediate drop-in models for the current K3 llama.cpp path. The mobile compressed-tensors format uses packed safetensors with explicit scales, not GGUF Q4_0. But the schema is still highly relevant because it shows what Google's edge recipe is optimizing:</p>
+
+    <ul>
+      <li>small KV footprint and short sliding windows;</li>
+      <li>static activation scales;</li>
+      <li>channel-wise low-bit weights;</li>
+      <li>selective 2-bit compression for memory-heavy embeddings and output heads;</li>
+      <li>8-bit treatment for sensitive gate/projection paths.</li>
+    </ul>
+
+    <p>That lines up with the K3 results. Normal GGUF Q4 is runnable today, but the mobile schema suggests the next useful experiment is not "download the mobile model and hope." It is a CT-style packed int4/int8 projection microbenchmark with static activation scales, compared against the current GGUF Q4_0 SpacemiT path.</p>
 
     <h2>What to believe today</h2>
     <p>The Gemma result is conditional but useful:</p>
 
     <ul>
       <li>Dense Gemma 4 12B is a good control, not a good K3 speed shape.</li>
+      <li>Gemma 4 E2B/E4B QAT Q4 are much better small Gemma speed shapes for K3.</li>
       <li>Gemma 4 26B A4B can be a good K3 development target, but only with the right expert tensor layout.</li>
       <li><code>UD-IQ4_XS</code> is a negative boundary for current SpacemiT acceleration.</li>
       <li>Q8_0 proves the accelerated path can work, but it is memory-tight.</li>
       <li><code>UD-Q4_K_M</code> is the current practical Gemma target because Q4_K plus Q5_1 aligns with the measured backend behavior.</li>
-      <li>MTP is promising for decode, but no native K3 speedup has been proven yet.</li>
+      <li>MTP now has short-harness prototype wins on E2B and E4B, but the ordered sparse path still needs a backend-friendly implementation.</li>
     </ul>
 
-    <p>The next useful Gemma work is not another headline benchmark. It is a longer quality harness for <code>UD-Q4_K_M</code>, a clean low-level correctness pass for Q5-family expert paths, and a decision on whether Gemma 4 MTP acceptance behavior is strong enough to justify a native llama.cpp implementation on K3.</p>
+    <p>The next useful Gemma work is not another headline benchmark. It is a longer quality harness for <code>UD-Q4_K_M</code>, a clean low-level correctness pass for Q5-family expert paths, longer E2B/E4B MTP runs, and a backend-friendly ordered sparse-logits implementation that avoids dynamic row gathers over quantized output tensors.</p>
   </main>
 
   <footer>
