@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The K3 LLM Speed Limit | RISC-V Agent Lab</title>
+  <meta name="description" content="A practical explanation of the current K3 LLM speed limit: raw IME peak, synthetic tensor shapes, LFM2.5's fit, and the remaining runtime bottlenecks.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 LLM notes</p>
+    <h1>The K3 LLM speed limit is not one number</h1>
+    <p class="lede">The most useful K3 LLM question is no longer "is the 60 TOPS claim real?" A raw sparse-int4 path makes the headline plausible. The better question is how much of that peak can survive contact with real model shapes, quant formats, attention, routing, logits, and runtime scheduling.</p>
+
+    <h2>The current answer</h2>
+    <p>The K3 looks much more promising for language-model experiments than it did at first, but the speed limit is architectural. Raw IME throughput, synthetic projection throughput, synthetic decode skeletons, and off-the-shelf model throughput all measure different layers of the stack.</p>
+
+    <p>So far, LFM2.5 8B A1B is the most important clue. It is not the largest public model tested, and it is not the fastest tiny control. It is interesting because its shape lines up unusually well with what the board wants: hidden size 2048, only 6 attention layers out of 24, many shortconv/mixer layers, top-4 MoE routing, and packed Q4_0 expert tensors.</p>
+
+    <h2>Four ceilings</h2>
+    <p>I now think about K3 LLM performance as four ceilings, from least realistic to most realistic:</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>What it says</th>
+            <th>What it does not say</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Raw IME peak</td>
+            <td>Native sparse-int4 instructions can reach tens-of-TOPS class throughput.</td>
+            <td>That a GGUF model will generate tokens at anything close to that rate.</td>
+          </tr>
+          <tr>
+            <td>Ideal tensor shapes</td>
+            <td>Q4_0 and some K-quant shapes can reach hundreds of GOPS when the tile is filled.</td>
+            <td>That batch-one decode will look like prompt processing.</td>
+          </tr>
+          <tr>
+            <td>Synthetic runtime skeletons</td>
+            <td>Windowed or hybrid attention plus persistent projection workers can move the theoretical decode budget.</td>
+            <td>That a trained model has the same dataflow, quality, or graph overhead.</td>
+          </tr>
+          <tr>
+            <td>Real public models</td>
+            <td>Current LFM2.5 and Gemma/Qwen runs show what survives in llama.cpp today.</td>
+            <td>That the hardware has no more headroom.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The raw peak is real, but narrow</h2>
+    <p>The raw IME sparse-int4 probe measured about 47.2 sparse-effective TOPS with eight A100-side workers. Scaling the observed clock toward the advertised max puts that in roughly the low-50s sparse-effective TOPS range. That makes the K3's headline class plausible.</p>
+
+    <p>But this is a direct primitive result. It does not include model loading, tensor layout conversion, repacking, routing, attention, residual work, logits, sampling, correctness validation for a full model, or stock llama.cpp dispatch. It explains the silicon class. It does not give a token rate.</p>
+
+    <h2>Shape is the first speed limit</h2>
+    <p>The ideal-shape benchmarks explain why prompt processing often looks much better than generation. The native tile wants width. Single-token decode has very little reuse, while prompt or batched work can reuse the same weights across many columns.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen-like down projection</th>
+            <th><code>cols=1</code></th>
+            <th><code>cols=8</code></th>
+            <th><code>cols=64</code></th>
+            <th><code>cols=128</code></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Q4_0</code></td>
+            <td>69.4 GOPS</td>
+            <td>360.8 GOPS</td>
+            <td>764.0 GOPS</td>
+            <td>831.5 GOPS</td>
+          </tr>
+          <tr>
+            <td><code>Q4_K</code></td>
+            <td>63.3 GOPS</td>
+            <td>294.2 GOPS</td>
+            <td>508.7 GOPS</td>
+            <td>566.7 GOPS</td>
+          </tr>
+          <tr>
+            <td><code>Q5_1</code></td>
+            <td>52.9 GOPS</td>
+            <td>218.2 GOPS</td>
+            <td>323.5 GOPS</td>
+            <td>331.1 GOPS</td>
+          </tr>
+          <tr>
+            <td><code>Q8_0</code></td>
+            <td>53.5 GOPS</td>
+            <td>263.6 GOPS</td>
+            <td>468.3 GOPS</td>
+            <td>not central</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is why the practical K3 advice keeps coming back to model and quant layout. <code>Q4_0</code> is the cleanest fast path in the probes. <code>Q4_K</code> is more common in useful public artifacts. <code>Q5_1</code> and <code>Q5_K</code> can be acceptable. Some attractive formats elsewhere are bad first targets here if they miss the native path.</p>
+
+    <h2>A naive LFM synthetic test was misleading</h2>
+    <p>The first LFM-shaped synthetic result looked disappointing. It modeled the active MoE experts as separate sparse projections, and the top-4 LFM-like case landed around 3.8 to 4.2 tok/s depending on the window setting. A top-1 ablation reached about 6.5 tok/s, which mostly proved that the projection path was being modeled as too expensive.</p>
+
+    <p>The problem was the abstraction. Real LFM-style MoE in llama.cpp does not have to behave like a handful of independent projection calls. The useful path is packed and expert-id-aware.</p>
+
+    <h2>The packed expert path changes the ceiling</h2>
+    <p>A later synthetic test matched the packed <code>MUL_MAT_ID</code> expert operation more closely: Q4_0 expert tensors, F32 activations, I32 expert ids, 32 experts, and top-4 routing. That result moved the expert projection path out of the obvious-bottleneck category.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Packed LFM-like expert op</th>
+            <th>Tokens</th>
+            <th>Median time</th>
+            <th>Throughput</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>gate/up</td>
+            <td>1</td>
+            <td>0.353 ms</td>
+            <td>83.08 GOPS</td>
+          </tr>
+          <tr>
+            <td>down</td>
+            <td>1</td>
+            <td>0.362 ms</td>
+            <td>81.17 GOPS</td>
+          </tr>
+          <tr>
+            <td>gate/up</td>
+            <td>128</td>
+            <td>11.854 ms</td>
+            <td>317.04 GOPS</td>
+          </tr>
+          <tr>
+            <td>down</td>
+            <td>128</td>
+            <td>11.762 ms</td>
+            <td>319.52 GOPS</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>For a rough expert-only decode budget, gate plus up plus down costs about 1.068 ms per MoE layer in this synthetic setup. Across 22 MoE layers, that is about 23.5 ms/token, or roughly 42.6 tok/s before the rest of the model is counted. That is not a full model result, but it is an important shift: the packed expert path is probably not the sole reason real LFM2.5 decode is around the high teens today.</p>
+
+    <h2>Why LFM2.5 is close to the board's preferred shape</h2>
+    <p>The LFM2.5 8B A1B anatomy is unusually convenient for this board:</p>
+
+    <ul>
+      <li>hidden size 2048;</li>
+      <li>24 total layers;</li>
+      <li>only 6 full attention layers;</li>
+      <li>18 shortconv/mixer layers;</li>
+      <li>32 experts with 4 active per token;</li>
+      <li>MoE intermediate width 1792;</li>
+      <li>about 91.5% of parameters in expert tensors;</li>
+      <li>public Q4_0 expert tensors that can be routed through the packed expert path.</li>
+    </ul>
+
+    <p>That is close to the shape the synthetic work keeps pointing toward: modest hidden size, limited attention frequency, packed MoE, and quant formats the backend can accelerate. It is a very different target from "any 8B model" or "any 30B MoE model."</p>
+
+    <h2>Where real models land right now</h2>
+    <p>The real-model numbers are lower than the synthetic ceilings, which is exactly what should happen. The useful comparison is where each model lands and why.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model path</th>
+            <th>Prompt-ish rate</th>
+            <th>Decode-ish rate</th>
+            <th>Read</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>LFM2.5 8B A1B Q4_0, early installed run</td>
+            <td>9.637 tok/s</td>
+            <td>7.828 tok/s</td>
+            <td>Fit in RAM; good architecture lead, not yet optimized.</td>
+          </tr>
+          <tr>
+            <td>LFM2.5, upstream baseline</td>
+            <td>38.9 tok/s at <code>pp128</code></td>
+            <td>15.15 tok/s at <code>tg32</code></td>
+            <td>Useful baseline for current upstream.</td>
+          </tr>
+          <tr>
+            <td>LFM2.5, opt-in packed expert path</td>
+            <td>82.2 tok/s at <code>pp128</code></td>
+            <td>15.35 tok/s at <code>tg32</code></td>
+            <td>Prompt gap was largely expert routing; decode had another limiter.</td>
+          </tr>
+          <tr>
+            <td>LFM2.5, derived Q4_0 token embedding/output layout</td>
+            <td>82.5 tok/s at <code>pp128</code></td>
+            <td>about 18.0 tok/s</td>
+            <td>Removes a Q6_K vocab/output hot spot, with quality caveats.</td>
+          </tr>
+          <tr>
+            <td>Gemma 4 26B A4B <code>UD-Q4_K_M</code></td>
+            <td>36.78 tok/s fixed-prompt average</td>
+            <td>4.56 tok/s fixed-prompt average</td>
+            <td>Best practical public-artifact target from the Gemma sweep.</td>
+          </tr>
+          <tr>
+            <td>Qwen3.6 35B A3B <code>UD-Q4_K_M</code></td>
+            <td>28.08 tok/s at <code>pp128</code></td>
+            <td>5.78 tok/s at <code>tg16</code></td>
+            <td>Promising boundary target, not a recommendation yet.</td>
+          </tr>
+          <tr>
+            <td>Qwen3 0.6B Q4_0</td>
+            <td>250-253 tok/s at <code>pp512</code></td>
+            <td>33.2 tok/s at <code>tg128</code></td>
+            <td>Good small control, not a large-model proof.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>The current bottleneck hypothesis</h2>
+    <p>If the packed expert synthetic result is directionally right, then LFM2.5's remaining gap is probably not just "the experts are slow." The likely remaining costs are the dense first layers, shortconv/mixer blocks, attention layers, router/top-k, norms and elementwise work, graph scheduling, memory movement, and the tied embedding/output projection.</p>
+
+    <p>The output projection already showed up once. The original public LFM2.5 Q4_0 GGUF had a lone <code>Q6_K</code> tensor for <code>token_embd.weight</code>, apparently tied to the vocabulary projection. In the opt-in path, perf still sampled the generic Q6_K dot kernel heavily. A derived model with that tensor requantized to Q4_0 moved decode from about 15.3 tok/s to about 18.0 tok/s. That is a speed lever, but it changes logits and needs task-level validation before being treated as a default artifact.</p>
+
+    <h2>Attention still decides the runtime class</h2>
+    <p>The native attention sweeps explain why LFM-like sparse attention schedules matter. Plain attention score/value cost grows linearly with context. Synthetic h2048 attention grew from about 6.6 ms/layer at context 1024 to about 210 ms/layer at context 32768. Full attention in every layer is a bad fit for fast decode on this board.</p>
+
+    <p>The more encouraging synthetic track is hybrid or windowed attention. With vectorized fast-math attention, local-window h2048/window512 skeletons land around 10 tok/s when every layer pays the attention tax. A hybrid attention-every-four-layers schedule gets into the mid-20s tok/s synthetic range. That is why LFM2.5's 6 attention layers out of 24 matter so much.</p>
+
+    <h2>What this means in practice</h2>
+    <p>The practical K3 target is not "any model that fits in memory." It is a narrower class:</p>
+
+    <ul>
+      <li>hidden size around 2048 or 2560;</li>
+      <li>few full attention layers, local attention, or hybrid attention;</li>
+      <li>packed MoE expert operations rather than many separate projection calls;</li>
+      <li>Q4_0, Q4_K, Q5_1, Q5_K, or Q8_0 hot tensors in backend-friendly shapes;</li>
+      <li>minimal hot-path repacking;</li>
+      <li>a vocab/output projection that does not fall back to a slow generic dot path.</li>
+    </ul>
+
+    <p>That is the current speed-limit story. The hardware has real headroom, and the raw TOPS result is not fake. But useful tokens are gated by architecture and runtime integration. LFM2.5 looks close to the best off-the-shelf shape found so far because it avoids several of the traps at once.</p>
+
+    <h2>Next useful measurements</h2>
+    <p>The next experiment should be stage-level timing for LFM2.5: expert MoE time, shortconv/mixer time, attention time, router/top-k time, norms and elementwise time, and output projection time. That would turn the current hypothesis into a budget and make it clear whether the next gains come from kernels, graph scheduling, quant layout, or model preparation.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
