@@ -375,6 +375,8 @@
 
     <p>Those are short direct-harness results, not a polished llama.cpp feature and not a production claim. They matter because they show MTP can produce an end-to-end speedup on K3-class Gemma QAT targets when the assistant body is cheap and the runtime avoids wasted vocabulary projections.</p>
 
+    <p>A later real E4B sweep made the boundary sharper. The ordered sparse rowstore scorer works and is cheap, but the full speculative callback still did not beat the target verification baseline. The best easy-prompt callback row reached 0.480 tok/s with perfect acceptance, while width-4 target verification reached about 0.546 token-equivalent/s. Removing full-vocabulary logits from target verification did not fix it: width-8 no-logits verification was still only about 0.553 token-equivalent/s. That means the current MTP blocker is target verification, not candidate scoring or logits materialization.</p>
+
     <h2>The ordered sparse path is the real MTP trick</h2>
     <p>The official E2B/E4B assistants are not meant to score the full 262144-token vocabulary every draft step. They use ordered embeddings: centroid vectors plus token ordering metadata. The runtime scores centroid buckets, expands the selected buckets into candidate token ids, and scores only that candidate subset.</p>
 
@@ -412,10 +414,10 @@
       <li><code>UD-IQ4_XS</code> is a negative boundary for current SpacemiT acceleration.</li>
       <li>Q8_0 proves the accelerated path can work, but it is memory-tight.</li>
       <li><code>UD-Q4_K_M</code> is the current practical Gemma target because Q4_K plus Q5_1 aligns with the measured backend behavior.</li>
-      <li>MTP now has short-harness prototype wins on E2B and E4B, but the ordered sparse path still needs a backend-friendly implementation.</li>
+      <li>MTP has short-harness prototype wins on E2B and E4B, but the later real E4B callback sweep shows target verification is the blocker before it becomes a practical speed path.</li>
     </ul>
 
-    <p>The next useful Gemma work is not another headline benchmark. It is a longer quality harness for <code>UD-Q4_K_M</code>, a clean low-level correctness pass for Q5-family expert paths, longer E2B/E4B MTP runs, and a backend-friendly ordered sparse-logits implementation that avoids dynamic row gathers over quantized output tensors.</p>
+    <p>The next useful Gemma work is not another headline benchmark. It is a longer quality harness for <code>UD-Q4_K_M</code>, a clean low-level correctness pass for Q5-family expert paths, and a target-verification shape audit for MTP. Candidate scoring is already cheap enough to stop being the first suspect.</p>
   </main>
 
   <footer>

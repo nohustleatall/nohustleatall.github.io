@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LFM2.5 on K3: The Runtime Recipe Matters | RISC-V Agent Lab</title>
+  <meta name="description" content="LFM2.5 runtime notes on K3: Q4_0 fast paths, repack, thread split, context penalty, token-embedding Q4_0, and remaining packed-kernel bottlenecks.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 runtime notes</p>
+    <h1>LFM2.5 on K3: the runtime recipe matters as much as the model</h1>
+    <p class="lede">The latest LFM2.5 work changed the practical K3 story. The model shape was already good. The new lesson is that the real speed unlock is keeping the model on the K3-friendly repacked Q4_0 path, then using different thread settings for decode and prefill.</p>
+
+    <h2>The short version</h2>
+    <p>The best current runtime policy is simple:</p>
+
+    <pre><code>decode threads:        6
+batch/prefill threads: 8
+repack:                enabled
+format:                Q4_0 fast-path friendly</code></pre>
+
+    <p>With that policy, the base LFM2.5 Q4_0 model is now a real low-20s tok/s decode target on K3, not just a synthetic shape argument. A risky derived model with the token embedding/output-side tensor requantized to Q4_0 reaches about 25 tok/s at short context and about 22.7 tok/s after a 1602-token prefill. That derivative is not promotion-ready because quality has not been validated.</p>
+
+    <h2>The practical speed result</h2>
+    <p>The current measured path puts LFM2.5 in a different class from dense Gemma-style runs. The packaged SpacemiT <code>llama-bench</code> path measured 122.857 tok/s prompt processing at <code>pp128</code> and 22.010 tok/s decode at <code>tg32</code>. The target-only harness then pushed realistic one-shot prefill and decode runs further.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Runtime setting</th>
+            <th>1602-token prefill</th>
+            <th>Decode after prefill</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>--threads 6 --threads-batch 6</code></td>
+            <td>70.404 tok/s</td>
+            <td>20.645 tok/s</td>
+          </tr>
+          <tr>
+            <td><code>--threads 6 --threads-batch 8</code></td>
+            <td>88.725 tok/s</td>
+            <td>20.686 tok/s</td>
+          </tr>
+          <tr>
+            <td><code>--threads 8 --threads-batch 8</code></td>
+            <td>86.740 tok/s</td>
+            <td>20.496 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The split setting matters because decode and prefill are different workloads. Decode likes 6 threads. Real batched prefill still wants 8 batch threads. Treating them as one knob leaves performance on the table.</p>
+
+    <h2>Context penalty is real, but gradual</h2>
+    <p>One useful result is what did not happen: LFM2.5 did not collapse immediately as prompt length grew. With the 6/8 thread split, decode dropped about 8.3% from a 102-token prompt to a 1602-token prompt.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Prompt tokens</th>
+            <th>Prefill</th>
+            <th>Decode after prefill</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>102</td>
+            <td>94.906 tok/s</td>
+            <td>22.500 tok/s</td>
+          </tr>
+          <tr>
+            <td>202</td>
+            <td>94.936 tok/s</td>
+            <td>22.373 tok/s</td>
+          </tr>
+          <tr>
+            <td>402</td>
+            <td>92.887 tok/s</td>
+            <td>22.047 tok/s</td>
+          </tr>
+          <tr>
+            <td>802</td>
+            <td>92.578 tok/s</td>
+            <td>21.611 tok/s</td>
+          </tr>
+          <tr>
+            <td>1602</td>
+            <td>87.528 tok/s</td>
+            <td>20.623 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That supports the earlier architecture read: LFM2.5 is not paying full-attention costs in every layer. Context still costs something, but over this range it is not the dominant limiter.</p>
+
+    <h2>The Q4_0 token-embedding derivative helps</h2>
+    <p>The public LFM2.5 Q4_0 GGUF has a token embedding/output-side tensor that keeps a slower path visible. A derived model with that tensor requantized to Q4_0 consistently improved decode by about 10%.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Prompt tokens</th>
+            <th>Prefill</th>
+            <th>Decode</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Base Q4_0</td>
+            <td>102</td>
+            <td>94.841 tok/s</td>
+            <td>22.534 tok/s</td>
+          </tr>
+          <tr>
+            <td>Token embedding Q4_0 derivative</td>
+            <td>102</td>
+            <td>98.160 tok/s</td>
+            <td>25.009 tok/s</td>
+          </tr>
+          <tr>
+            <td>Base Q4_0</td>
+            <td>1602</td>
+            <td>88.675 tok/s</td>
+            <td>20.629 tok/s</td>
+          </tr>
+          <tr>
+            <td>Token embedding Q4_0 derivative</td>
+            <td>1602</td>
+            <td>90.361 tok/s</td>
+            <td>22.705 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>A five-prompt smoke test showed the speed gain is stable: every prompt landed around 1.10x faster on decode. It did not show gross corruption. It also did not clear quality. Both base and derivative outputs exposed reasoning-style text in the harness, and the derivative had some prompt-shape drift. The right conclusion is "real runtime lever, not a recommended artifact."</p>
+
+    <h2>MXFP4_MOE was a trap</h2>
+    <p>The sprint also tested an <code>MXFP4_MOE</code> derivative. It ran, but it was much slower: about 1.918 tok/s decode versus 22.733 tok/s for the base LFM2.5 Q4_0 run in that comparison.</p>
+
+    <p>That is a useful negative result. A nominally lower-bit format is not automatically better on K3. What matters is whether the backend has a real accelerated path for that exact layout. This conversion moved too much work away from the fast Q4_0 path.</p>
+
+    <h2>Where the time goes now</h2>
+    <p>The steady decode profile is not dominated by sampling, shell overhead, or high-level application logic. It is mostly packed Q4 inner loops, memory copy/data movement around those kernels, IME2 GEMM kernels, OpenMP worker overhead, and a smaller remaining Q6_K-style path.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Delayed decode profile bucket</th>
+            <th>Sample share</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>INNER_BLK_LOOP756</code></td>
+            <td>41.97%</td>
+          </tr>
+          <tr>
+            <td><code>memcpy_main_loop34</code></td>
+            <td>18.13%</td>
+          </tr>
+          <tr>
+            <td><code>spacemit_kernels::ime2::gemm_kernel_i8i8_m1</code></td>
+            <td>7.15%</td>
+          </tr>
+          <tr>
+            <td>OpenMP worker/wait symbols among top entries</td>
+            <td>about 12.4%</td>
+          </tr>
+          <tr>
+            <td>Q4_0 repack in delayed profile</td>
+            <td>3.26%</td>
+          </tr>
+          <tr>
+            <td>RVV flash attention chunk</td>
+            <td>1.46%</td>
+          </tr>
+          <tr>
+            <td>greedy sampling</td>
+            <td>0.28%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The graph profile says the same thing at a higher level. The token-embedding Q4_0 derivative barely changes the FFN or <code>MUL_MAT_ID</code> bucket. It reduces output and generic <code>MUL_MAT</code> overhead. The main ceiling is still the packed expert path and the data movement around it.</p>
+
+    <h2>The model-shape lesson survived</h2>
+    <p>This sprint reinforces the earlier model-shape conclusion. LFM2.5 is fast on K3 because it has the right structure for this board: hidden size 2048, 24 layers, only 6 attention layers, packed Q4_0 MoE expert tensors, and a runtime path that can use <code>MUL_MAT_ID</code> instead of treating experts as separate projection calls.</p>
+
+    <p>A direct shape comparison against Gemma 4 E4B showed why this matters. The intrusive graph-profile numbers are not absolute speed numbers, but the composition is useful: LFM has less attention projection work, fewer layers, a smaller active graph, and a packed routed expert abstraction. Dense or generic Q4 FFN matmuls dominate Gemma. Packed routed expert matmul is the abstraction that makes LFM viable.</p>
+
+    <h2>What to do next</h2>
+    <p>The practical recipe today is:</p>
+
+    <ul>
+      <li>use a Q4_0 fast-path-friendly LFM2.5 artifact;</li>
+      <li>keep repack enabled;</li>
+      <li>use 6 decode threads and 8 batch threads;</li>
+      <li>treat the token-embedding Q4_0 derivative as a speed experiment until quality is evaluated;</li>
+      <li>avoid exotic low-bit formats unless the backend has a measured fast path for the exact layout.</li>
+    </ul>
+
+    <p>The next useful engineering target is not another broad model sweep. It is reducing copy/packing overhead around the packed Q4 expert path, or changing the expert <code>MUL_MAT_ID</code> path so it consumes a more directly usable activation and weight layout. The next useful model-quality target is a small deterministic eval or perplexity harness for the token-embedding Q4_0 derivative.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
