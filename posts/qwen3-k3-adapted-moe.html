@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3 Adapted MoE on K3 | RISC-V Agent Lab</title>
+  <meta name="description" content="Qwen3 adapted-MoE notes on K3: slicing dense FFNs into 512-wide experts, a semi-coherent top-2 demo, same-binary speed comparison, and a 30B-class active-path synthetic MoE result.">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="site-title" href="/">RISC-V Agent Lab</a>
+    <nav aria-label="Primary navigation">
+      <a href="/downloads.html">Downloads</a>
+      <a href="/posts/orange-pi-rv2-field-notes.html">RV2 Field Notes</a>
+      <a href="/posts/why-riscv-codex-builds.html">Why This Exists</a>
+      <a href="/posts/codex-0.136-orange-pi-rv2.html">Build Notes</a>
+    </nav>
+  </header>
+
+  <main class="post">
+    <p class="eyebrow">K3 model-shape notes</p>
+    <h1>Qwen3 on K3: adapting a dense model into the board's preferred MoE shape</h1>
+    <p class="lede">The Qwen3 adapted-MoE work is the clearest bridge so far between two separate ideas: K3 likes small active expert paths, and real public dense models already contain FFNs that can be sliced into those shapes. The result is not a finished model, but it is a useful proof that the shape can be trained, packaged, loaded, and run through a K3 SpacemiT llama.cpp path.</p>
+
+    <h2>The short version</h2>
+    <p>Qwen3-1.7B has a convenient geometry for K3 experiments. Its hidden size is 2048 and its FFN intermediate size is 6144, which splits exactly into twelve 512-wide chunks. That means each dense FFN can be represented as 12 candidate experts without padding.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Result</th>
+            <th>What it proves</th>
+            <th>What it does not prove</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Top-2 adapted package for layers 0-2</td>
+            <td>Three Qwen3 layers can be replaced by 512-wide top-2 experts and still produce semi-coherent English.</td>
+            <td>That a full adapted Qwen3 model is high quality.</td>
+          </tr>
+          <tr>
+            <td>GGUF runtime bridge</td>
+            <td>The adapted expert tensors can be injected into a Qwen3 GGUF and routed through a patched llama.cpp MoE path.</td>
+            <td>That the first bridge was fast; the BF16/F32 bridge was a path proof.</td>
+          </tr>
+          <tr>
+            <td>Same-binary Q4_0 comparison</td>
+            <td>The adapted branch is about 1.19x faster than dense Qwen3-1.7B Q4_0 on decode in the same patched SpacemiT build.</td>
+            <td>That the adapted model is 4x faster; that earlier comparison was not apples-to-apples.</td>
+          </tr>
+          <tr>
+            <td>30B-class synthetic active-path demo</td>
+            <td>A 29.45B resident-parameter top-1 MoE with h2048/e512 active path can run at about 13.8 tok/s decode.</td>
+            <td>That a useful trained 30B MoE exists or that 20-30 tok/s was achieved at 30B resident scale.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>Why Qwen3-1.7B is a good donor</h2>
+    <p>The first reason Qwen3-1.7B is attractive is mechanical: the dimensions line up with the K3 shape that has been measuring well.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen3-1.7B property</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>hidden size</td>
+            <td>2048</td>
+          </tr>
+          <tr>
+            <td>layers</td>
+            <td>28</td>
+          </tr>
+          <tr>
+            <td>attention heads</td>
+            <td>16</td>
+          </tr>
+          <tr>
+            <td>KV heads</td>
+            <td>8</td>
+          </tr>
+          <tr>
+            <td>FFN intermediate</td>
+            <td>6144</td>
+          </tr>
+          <tr>
+            <td>natural 512-wide chunks</td>
+            <td>12 per layer</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The split is exact:</p>
+
+    <pre><code>gate_proj: 6144 x 2048 -> 12 x 512 x 2048
+up_proj:   6144 x 2048 -> 12 x 512 x 2048
+down_proj: 2048 x 6144 -> 12 x 512 x 2048</code></pre>
+
+    <p>That matches the shape the K3 synthetic work keeps favoring: hidden 2048, expert width 512, and a small number of active experts per token.</p>
+
+    <h2>Slicing is easy. Top-2 quality is not.</h2>
+    <p>The first experiments verified that exact FFN slicing is structurally sound. Reassembling sliced layer-0 and layer-27 FFNs matched the original dense computation to BF16-level tolerance. Replacing all MLPs with a sliced module while still using all 12 experts produced coherent English, which proved the replacement path was compatible with Qwen generation.</p>
+
+    <p>The hard part was top-2 compression. Random top-2 routing was incoherent. Oracle norm top-2 was incoherent. Router-only shortcuts were not enough. The dense FFN is the sum of all 12 learned chunks; throwing away 10 chunks per token is a severe approximation unless the experts and router are adapted.</p>
+
+    <h2>The first useful demo is shallow</h2>
+    <p>The known-good demo package adapts only layers 0, 1, and 2:</p>
+
+    <pre><code>base model: Qwen3-1.7B
+adapted layers: 0, 1, 2
+hidden size: 2048
+expert width: 512
+experts per adapted layer: 12
+active experts: top-2
+route scale: 2.0</code></pre>
+
+    <p>The package contains per-layer adapted tensors plus a manifest. It is not a full native GGUF by itself, and it is not a production-quality model. But it crossed an important bar: short chat-template generations were semi-coherent English and answered the prompt directly.</p>
+
+    <p>One example output from the demo branch:</p>
+
+    <blockquote>
+      A small mixture of experts language model can be fast because it uses multiple expert models to make a prediction.
+    </blockquote>
+
+    <p>That is rough, but it is not random token soup. The best package scored 6.4063 in the local generation-eval harness, while follow-up continuation training on a tiny transcript set regressed. That failure is useful too: better isolated layer metrics did not automatically improve generation quality.</p>
+
+    <h2>The GGUF bridge now exists</h2>
+    <p>The next step was moving from a PyTorch package to the K3 runtime shape. A bridge GGUF was created by copying the dense Qwen3-1.7B tensors and adding 12 adapted tensors for layers 0-2:</p>
+
+    <pre><code>blk.0/1/2.ffn_gate_inp.weight   [2048, 12]       F32
+blk.0/1/2.ffn_gate_exps.weight  [2048, 512, 12]  F32
+blk.0/1/2.ffn_up_exps.weight    [2048, 512, 12]  F32
+blk.0/1/2.ffn_down_exps.weight  [512, 2048, 12]  F32</code></pre>
+
+    <p>The patched llama.cpp path recognizes those optional tensors and, when the opt-in branch is enabled, replaces layers 0-2 FFNs with an MoE FFN using 12 experts, top-2 routing, expert width 512, route scale 2.0, softmax gating, and SiLU activation.</p>
+
+    <p>The first BF16/F32 bridge was a path proof. It produced branch proof logs and semi-coherent output, but it was slow because most of the model was still generic dense Qwen3 work and the adapted experts were F32.</p>
+
+    <h2>The same-binary comparison corrected the speed claim</h2>
+    <p>The more useful benchmark is the corrected Q4_0 same-binary comparison. Both dense and adapted models ran through the same patched SpacemiT-capable llama.cpp build and the same local libraries.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Qwen3-1.7B Q4_0</th>
+            <th>Dense</th>
+            <th>Adapted layers 0-2</th>
+            <th>Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>pp128</code></td>
+            <td>247.07 tok/s</td>
+            <td>257.54 tok/s</td>
+            <td>1.04x</td>
+          </tr>
+          <tr>
+            <td><code>tg64</code></td>
+            <td>24.04 tok/s</td>
+            <td>28.68 tok/s</td>
+            <td>1.19x</td>
+          </tr>
+          <tr>
+            <td>perf-recorded <code>tg64</code></td>
+            <td>23.55 tok/s</td>
+            <td>28.13 tok/s</td>
+            <td>1.19x</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>This is the right scale of claim. The adapted branch is faster, and the branch logs prove layers 0-2 use the MoE path. But it is not a massive speedup because only 3 of 28 layers were adapted and dense Qwen3 Q4_0 already benefits strongly from the same SpacemiT runtime.</p>
+
+    <h2>The 30B-class synthetic demo answers a different question</h2>
+    <p>The 30B-class active-path demo tested a separate idea: can the K3 hold a large bank of inactive experts while keeping the active per-token path close to h2048/e512?</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fixture</th>
+            <th>Resident params</th>
+            <th>Size</th>
+            <th>Active path</th>
+            <th>Prompt</th>
+            <th>Decode</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>synthetic LFM-like MoE</td>
+            <td>29.45B</td>
+            <td>15.49 GiB</td>
+            <td>h2048/e512/top-1</td>
+            <td>26.44 tok/s</td>
+            <td>13.81 tok/s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>That fixture is not intelligent. It uses synthetic zero-filled/randomless Q4_0-style tensors. The result is still useful because it separates resident parameter count from active-path cost. A 29.45B resident-parameter MoE can load and decode on K3 without collapsing to dense-30B speeds, but inactive experts are not free and the result missed the 20-30 tok/s target.</p>
+
+    <h2>What this means</h2>
+    <p>The Qwen3 work gives a cleaner picture of what a K3-native language model might look like:</p>
+
+    <ul>
+      <li>h2048/e512 is still the best practical active expert shape found so far;</li>
+      <li>partial MoE transplants can produce coherent output, but shallow replacement only gives modest whole-model speedups;</li>
+      <li>quality needs adaptation, not just router selection over frozen dense chunks;</li>
+      <li>benchmark comparisons must use the same SpacemiT build and library set;</li>
+      <li>large resident MoE parameter counts are possible, but runtime overhead grows with the expert bank.</li>
+    </ul>
+
+    <p>The next useful work is not claiming a finished model. It is building a better training signal for the adapted layers, expanding replacement depth without generation collapse, and making the GGUF/SpacemiT bridge less shape-specific. If that succeeds, the synthetic 30B active-path demo shows why the payoff could matter.</p>
+  </main>
+
+  <footer>
+    <p>No analytics, comments, or tracking scripts are used here.</p>
+  </footer>
+</body>
+</html>
